@@ -1,0 +1,6 @@
+[workspace]
+members = ["s57", "s57-cli"]
+resolver = "2"
+
+[workspace.dependencies]
+log = "0.4"

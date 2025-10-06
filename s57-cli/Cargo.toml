@@ -1,0 +1,9 @@
+[package]
+name = "s57-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.48", features = ["derive"] }
+env_logger = "0.11.8"
+s57 = { path = "../s57" }
