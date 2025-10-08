@@ -6,6 +6,7 @@
 
 use crate::error::{ParseError, ParseErrorKind, Result};
 use crate::iso8211::{Field, Record};
+use crate::s57_schema::OverrideSchema;
 use std::collections::HashMap;
 
 /// Field format type
@@ -81,6 +82,8 @@ impl FieldDef {
 pub struct DDR {
     /// Field definitions indexed by tag
     field_defs: HashMap<String, FieldDef>,
+    /// Override schema for S-57 field optionality
+    schema: OverrideSchema,
 }
 
 impl DDR {
@@ -94,6 +97,7 @@ impl DDR {
         }
 
         let mut field_defs = HashMap::new();
+        let schema = OverrideSchema::new();
 
         // The DDR contains field definitions in fields after 0000 and 0001
         // Each field (starting from index 2) is a data descriptive field where:
@@ -106,12 +110,26 @@ impl DDR {
             }
 
             // Parse field definition from this field's data
-            if let Ok(def) = Self::parse_field_definition(field) {
+            if let Ok(mut def) = Self::parse_field_definition(field) {
+                // Apply format overrides from schema
+                for subfield in &mut def.subfields {
+                    if let Some(override_format) = schema.get_format_override(&def.tag, &subfield.label) {
+                        subfield.format = override_format;
+                        // For AsciiFixed, ensure width is set correctly
+                        if matches!(override_format, FormatType::AsciiFixed) && subfield.width == 0 {
+                            // Default to 4 for R(4) -> A(4) conversion
+                            subfield.width = 4;
+                        }
+                    }
+                }
                 field_defs.insert(def.tag.clone(), def);
             }
         }
 
-        Ok(DDR { field_defs })
+        Ok(DDR {
+            field_defs,
+            schema,
+        })
     }
 
     /// Parse a single field definition from a DDR field
@@ -364,7 +382,7 @@ impl DDR {
             let mut current_group = Vec::new();
             let start_offset = offset;
 
-            for subfield_def in &def.subfields {
+            for (subfield_idx, subfield_def) in def.subfields.iter().enumerate() {
                 if offset >= data.len() || data[offset] == 0x1E {
                     break;
                 }
@@ -384,13 +402,50 @@ impl DDR {
                     offset = end;
                     Self::parse_subfield_value(subfield_data, &subfield_def.format)
                 } else {
-                    // Variable width - read until unit terminator or field terminator
-                    let start = offset;
-                    while offset < data.len() && data[offset] != 0x1F && data[offset] != 0x1E {
-                        offset += 1;
+                    // Variable width - check if this is an optional field that may be omitted
+                    let is_optional = self.schema.is_optional(&field.tag, &subfield_def.label);
+
+                    if is_optional && matches!(subfield_def.format, FormatType::Ascii) {
+                        // Optional variable-length ASCII field: use lookahead to detect omission
+                        let current_byte = data[offset];
+
+                        if current_byte == 0x1F {
+                            // UT immediately → field is present but empty
+                            // The UT will be consumed at the start of the next iteration
+                            SubfieldValue::String(String::new())
+                        } else if current_byte == 0x1E {
+                            // FT → field and all remaining omitted
+                            break;
+                        } else {
+                            // Check if this looks like the next field (binary data when next field is binary)
+                            let next_field_is_binary = def.subfields.get(subfield_idx + 1)
+                                .map(|next_def| matches!(next_def.format,
+                                    FormatType::BinaryInt | FormatType::RealBinary))
+                                .unwrap_or(false);
+
+                            // If current byte is non-ASCII and next field is binary, field is omitted
+                            if next_field_is_binary && (current_byte < 0x20 || current_byte >= 0x7F) && current_byte != 0x1F {
+                                // Field omitted - don't advance offset, skip to next subfield
+                                SubfieldValue::Null
+                            } else {
+                                // Read ASCII until UT/FT
+                                let start = offset;
+                                while offset < data.len() && data[offset] != 0x1F && data[offset] != 0x1E {
+                                    offset += 1;
+                                }
+                                let subfield_data = &data[start..offset];
+                                Self::parse_subfield_value(subfield_data, &subfield_def.format)
+                            }
+                        }
+                    } else {
+                        // Required field or non-ASCII: read until unit terminator or field terminator
+                        let start = offset;
+                        while offset < data.len() && data[offset] != 0x1F && data[offset] != 0x1E {
+                            offset += 1;
+                        }
+                        let subfield_data = &data[start..offset];
+                        Self::parse_subfield_value(subfield_data, &subfield_def.format)
                     }
-                    let subfield_data = &data[start..offset];
-                    Self::parse_subfield_value(subfield_data, &subfield_def.format)
                 };
 
                 current_group.push((subfield_def.label.clone(), value));
@@ -617,6 +672,7 @@ mod tests {
         // Create a mock DDR with this field definition
         let mut ddr = DDR {
             field_defs: std::collections::HashMap::new(),
+            schema: OverrideSchema::new(),
         };
         ddr.field_defs.insert("DSID".to_string(), field_def);
 
@@ -694,6 +750,58 @@ mod tests {
 
         // Print all parsed values for debugging
         println!("\nAll parsed DSID fields:");
+        for (label, value) in group {
+            println!("  {}: {:?}", label, value);
+        }
+    }
+
+    #[test]
+    fn test_parse_full_dsid_from_actual_file() {
+        // Full DSID field from US5PVDGD.000 record 1
+        // Based on hex dump: offset 0x65E in the file
+        let field_data: Vec<u8> = vec![
+            0x0a, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x55, 0x53, 0x35, 0x50, 0x56, 0x44, 0x47, 0x44, 0x2e,
+            0x30, 0x30, 0x30, 0x1f, 0x34, 0x1f, 0x30, 0x1f, 0x32, 0x30, 0x32, 0x35, 0x30, 0x37, 0x30, 0x33,
+            0x32, 0x30, 0x32, 0x35, 0x30, 0x37, 0x30, 0x33, 0x30, 0x33, 0x2e, 0x31, 0x01, 0x1f, 0x32, 0x2e,
+            0x30, 0x1f, 0x01, 0x26, 0x02, 0x50, 0x72, 0x6f, 0x64, 0x75, 0x63, 0x65, 0x64, 0x20, 0x62, 0x79,
+            0x20, 0x4e, 0x4f, 0x41, 0x41, 0x1f, 0x1e,
+        ];
+
+        let array_descriptor = "RCNM!RCID!EXPP!INTU!DSNM!EDTN!UPDN!UADT!ISDT!STED!PRSP!PSDN!PRED!PROF!AGEN!COMT".to_string();
+        let format_controls = "(b11,b14,2b11,3A,2A(8),R(4),b11,2A,b11,b12,A)".to_string();
+
+        let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
+
+        let field_def = FieldDef {
+            tag: "DSID".to_string(),
+            name: "Data set identification field".to_string(),
+            array_descriptor: array_descriptor.clone(),
+            format_controls: format_controls.clone(),
+            subfields,
+            is_repeating: false,
+        };
+
+        let mut ddr = DDR {
+            field_defs: std::collections::HashMap::new(),
+            schema: OverrideSchema::new(),
+        };
+        ddr.field_defs.insert("DSID".to_string(), field_def);
+
+        let field = Field {
+            tag: "DSID".to_string(),
+            data: field_data,
+        };
+
+        let result = ddr.parse_field_data(&field);
+        assert!(result.is_ok(), "Failed to parse DSID field: {:?}", result.err());
+
+        let parsed = result.unwrap();
+        let groups = parsed.groups();
+        assert_eq!(groups.len(), 1);
+        let group = &groups[0];
+
+        // Print all fields for debugging
+        println!("\nFull DSID field parsing from actual file:");
         for (label, value) in group {
             println!("  {}: {:?}", label, value);
         }
