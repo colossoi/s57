@@ -43,6 +43,27 @@ pub struct FieldDef {
     pub format_controls: String,
     /// Subfield definitions
     pub subfields: Vec<SubfieldDef>,
+    /// Whether this is a repeating group (starts with *)
+    pub is_repeating: bool,
+}
+
+impl FieldDef {
+    /// Get the number of subfield labels defined in the array descriptor
+    pub fn subfield_count(&self) -> usize {
+        if self.array_descriptor.is_empty() {
+            return 0;
+        }
+
+        // Strip leading '*' if present
+        let labels = self.array_descriptor.trim_start_matches('*');
+
+        // Count labels separated by '!'
+        if labels.is_empty() {
+            0
+        } else {
+            labels.split('!').filter(|s| !s.trim().is_empty()).count()
+        }
+    }
 }
 
 /// Data Descriptive Record parser
@@ -120,6 +141,9 @@ impl DDR {
             String::new()
         };
 
+        // Check if this is a repeating group (starts with *)
+        let is_repeating = array_descriptor.starts_with('*');
+
         // Parse subfield definitions from format controls
         let subfields = Self::parse_format_controls(&array_descriptor, &format_controls);
 
@@ -129,6 +153,7 @@ impl DDR {
             array_descriptor,
             format_controls,
             subfields,
+            is_repeating,
         })
     }
 

@@ -97,7 +97,8 @@ fn print_yaml_structure_with_ddr(records: &[s57::iso8211::Record], limit: usize,
     println!("\n# Field definitions found in DDR:");
     for (tag, def) in ddr.field_defs() {
         if !tag.starts_with('0') {
-            println!("#   {}: {} ({} subfields)", tag, def.name, def.subfields.len());
+            let repeating = if def.is_repeating { " [repeating]" } else { "" };
+            println!("#   {}: {} ({} subfields{})", tag, def.name, def.subfield_count(), repeating);
         }
     }
     println!();
@@ -169,7 +170,10 @@ fn print_yaml_structure_with_ddr(records: &[s57::iso8211::Record], limit: usize,
                     if !field_def.format_controls.is_empty() {
                         println!("            format_controls: \"{}\"  # Subfield types", field_def.format_controls);
                     }
-                    println!("            subfields: {}  # Number of subfields defined", field_def.subfields.len());
+                    println!("            subfield_count: {}  # Number of subfield labels", field_def.subfield_count());
+                    if field_def.is_repeating {
+                        println!("            repeating_group: true  # Group can repeat multiple times");
+                    }
                 } else {
                     println!("          data: <binary>  # {} bytes", field.data.len());
                 }
