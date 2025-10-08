@@ -157,8 +157,24 @@ fn print_yaml_structure_with_ddr(records: &[s57::iso8211::Record], limit: usize,
                 } else {
                     println!("          data: <binary>  # {} bytes", field.data.len());
                 }
+            } else if record.leader.is_ddr() {
+                // In DDR: this field is a definition, not data
+                // Parse it as a data descriptive field (DDF)
+                if let Some(field_def) = ddr.get_field_def(&field.tag) {
+                    println!("          definition:  # Data Descriptive Field (DDF)");
+                    println!("            field_name: \"{}\"", field_def.name);
+                    if !field_def.array_descriptor.is_empty() {
+                        println!("            array_descriptor: \"{}\"  # Subfield labels", field_def.array_descriptor);
+                    }
+                    if !field_def.format_controls.is_empty() {
+                        println!("            format_controls: \"{}\"  # Subfield types", field_def.format_controls);
+                    }
+                    println!("            subfields: {}  # Number of subfields defined", field_def.subfields.len());
+                } else {
+                    println!("          data: <binary>  # {} bytes", field.data.len());
+                }
             } else {
-                // Try to parse using DDR
+                // Data Record: parse using DDR definitions
                 match ddr.parse_field_data(field) {
                     Ok(parsed) => {
                         println!("          data:");

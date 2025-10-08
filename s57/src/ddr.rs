@@ -63,18 +63,18 @@ impl DDR {
 
         let mut field_defs = HashMap::new();
 
-        // The DDR contains field definitions in the 0000 and 0001 fields
-        // Each subsequent field pair defines a data field structure
-        for i in (2..record.fields.len()).step_by(2) {
-            if i + 1 >= record.fields.len() {
-                break;
+        // The DDR contains field definitions in fields after 0000 and 0001
+        // Each field (starting from index 2) is a data descriptive field where:
+        // - The field's tag (from directory) is the tag being defined
+        // - The field's data contains the definition (name, array descriptor, format controls)
+        for field in &record.fields[2..] {
+            // Skip the special 0000 and 0001 fields if they appear again
+            if field.tag == "0000" || field.tag == "0001" {
+                continue;
             }
 
-            let field_tag = &record.fields[i];
-            let field_desc = &record.fields[i + 1];
-
-            // Parse field definition
-            if let Ok(def) = Self::parse_field_definition(field_tag, field_desc) {
+            // Parse field definition from this field's data
+            if let Ok(def) = Self::parse_field_definition(field) {
                 field_defs.insert(def.tag.clone(), def);
             }
         }
@@ -82,18 +82,24 @@ impl DDR {
         Ok(DDR { field_defs })
     }
 
-    /// Parse a single field definition
-    fn parse_field_definition(field_tag: &Field, field_desc: &Field) -> Result<FieldDef> {
-        let tag = field_tag.tag.clone();
+    /// Parse a single field definition from a DDR field
+    fn parse_field_definition(field: &Field) -> Result<FieldDef> {
+        let tag = field.tag.clone();
 
-        // Field descriptor structure (from 0000/0001 fields):
-        // Field name, array descriptor, format controls separated by unit terminators
-        let parts: Vec<&[u8]> = field_desc.data.split(|&b| b == 0x1F).collect();
+        // Field descriptor structure:
+        // Field controls (9 bytes) + Field name | UT | Array descriptor | UT | Format controls | FT
+        // Split by unit terminators (0x1F)
+        let parts: Vec<&[u8]> = field.data.split(|&b| b == 0x1F).collect();
 
-        let name = if !parts.is_empty() {
-            String::from_utf8_lossy(parts[0]).trim().to_string()
+        // First part contains field controls (9 bytes) + field name
+        let (field_controls, name) = if !parts.is_empty() && parts[0].len() >= 9 {
+            let controls = String::from_utf8_lossy(&parts[0][..9]).to_string();
+            let field_name = String::from_utf8_lossy(&parts[0][9..]).trim().to_string();
+            (controls, field_name)
+        } else if !parts.is_empty() {
+            (String::new(), String::from_utf8_lossy(parts[0]).trim().to_string())
         } else {
-            String::new()
+            (String::new(), String::new())
         };
 
         let array_descriptor = if parts.len() > 1 {
@@ -102,8 +108,14 @@ impl DDR {
             String::new()
         };
 
+        // Third part: format controls (may have FT at end)
         let format_controls = if parts.len() > 2 {
-            String::from_utf8_lossy(parts[2]).trim().to_string()
+            let format_part = parts[2];
+            if !format_part.is_empty() && format_part[format_part.len() - 1] == 0x1E {
+                String::from_utf8_lossy(&format_part[..format_part.len() - 1]).trim().to_string()
+            } else {
+                String::from_utf8_lossy(format_part).trim().to_string()
+            }
         } else {
             String::new()
         };
