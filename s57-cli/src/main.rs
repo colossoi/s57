@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand, ValueEnum};
 use s57::S57File;
 use std::path::PathBuf;
 
@@ -14,17 +14,37 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Show detailed information about each record
-    #[arg(short, long)]
-    details: bool,
+    #[command(subcommand)]
+    command: Commands,
+}
 
-    /// Print file structure in YAML format with semantic interpretation
-    #[arg(short = 'y', long)]
-    yaml: bool,
+#[derive(Subcommand)]
+enum Commands {
+    /// Display summary information about the file
+    Info,
 
-    /// Limit number of records to print (for YAML output)
-    #[arg(long, default_value = "10")]
-    limit: usize,
+    /// Print file contents
+    Print {
+        /// Output format
+        #[arg(short, long, value_enum, default_value = "yaml")]
+        format: OutputFormat,
+
+        /// Print only a specific record number
+        #[arg(short, long)]
+        record: Option<usize>,
+
+        /// Limit number of records to print (only for yaml format)
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum OutputFormat {
+    /// YAML format with semantic interpretation
+    Yaml,
+    /// Hex dump of ISO 8211 fields
+    Hex,
 }
 
 fn main() {
@@ -46,65 +66,197 @@ fn main() {
         }
     };
 
-    println!("Parsing file: {}", cli.file.display());
-    println!("File size: {} bytes", data.len());
-
     // Parse the S-57 file
-    match S57File::from_bytes(&data) {
-        Ok(file) => {
-            let records = file.records();
-            println!("Successfully parsed {} records", records.len());
-
-            if cli.yaml {
-                // Parse DDR first
-                if let Some(ddr_record) = records.first() {
-                    match s57::ddr::DDR::parse(ddr_record) {
-                        Ok(ddr) => {
-                            print_yaml_structure_with_ddr(records, cli.limit, &ddr);
-                        }
-                        Err(e) => {
-                            eprintln!("Warning: Failed to parse DDR: {}", e);
-                            print_yaml_structure(records, cli.limit);
-                        }
-                    }
-                } else {
-                    print_yaml_structure(records, cli.limit);
-                }
-            } else if cli.details {
-                println!("\nRecord details:");
-                for (i, record) in records.iter().enumerate() {
-                    println!("\nRecord {}:", i);
-                    println!("  Type: {}", if record.leader.is_ddr() { "DDR" } else { "DR" });
-                    println!("  Length: {} bytes", record.leader.record_length);
-                    println!("  Fields: {}", record.fields.len());
-
-                    for field in &record.fields {
-                        println!("    - {} ({} bytes)", field.tag, field.data.len());
-                    }
-                }
-            }
-        }
+    let file = match S57File::from_bytes(&data) {
+        Ok(file) => file,
         Err(e) => {
             eprintln!("Error parsing file: {}", e);
             std::process::exit(1);
         }
+    };
+
+    match &cli.command {
+        Commands::Info => {
+            print_info(&cli.file, data.len(), &file);
+        }
+        Commands::Print { format, record, limit } => {
+            match format {
+                OutputFormat::Yaml => {
+                    print_yaml(&file, *record, *limit);
+                }
+                OutputFormat::Hex => {
+                    print_hex(&file, *record);
+                }
+            }
+        }
     }
 }
 
-fn print_yaml_structure_with_ddr(records: &[s57::iso8211::Record], limit: usize, ddr: &s57::ddr::DDR) {
-    use s57::interpret::*;
+fn print_info(path: &PathBuf, file_size: usize, file: &S57File) {
+    let records = file.records();
 
-    println!("\n# Field definitions found in DDR:");
-    for (tag, def) in ddr.field_defs() {
-        if !tag.starts_with('0') {
-            let repeating = if def.is_repeating { " [repeating]" } else { "" };
-            println!("#   {}: {} ({} subfields{})", tag, def.name, def.subfield_count(), repeating);
+    println!("File: {}", path.display());
+    println!("Size: {} bytes", file_size);
+    println!("Records: {}", records.len());
+
+    // Parse DDR if available
+    if let Some(ddr_record) = records.first() {
+        if ddr_record.leader.is_ddr() {
+            match s57::ddr::DDR::parse(ddr_record) {
+                Ok(ddr) => {
+                    println!("\nData Descriptive Record (DDR):");
+                    println!("  Field definitions: {}", ddr.field_defs().len());
+
+                    // Count different record types in data records
+                    let mut record_types = std::collections::HashMap::new();
+                    for record in &records[1..] {
+                        for field in &record.fields {
+                            if field.tag == "DSID" || field.tag == "FRID" || field.tag == "VRID" {
+                                *record_types.entry(field.tag.clone()).or_insert(0) += 1;
+                            }
+                        }
+                    }
+
+                    if !record_types.is_empty() {
+                        println!("\nRecord types:");
+                        for (tag, count) in record_types.iter() {
+                            let description = match tag.as_str() {
+                                "DSID" => "Data Set Identification",
+                                "FRID" => "Feature Records",
+                                "VRID" => "Vector Records",
+                                _ => "Unknown",
+                            };
+                            println!("  {}: {} ({})", tag, count, description);
+                        }
+                    }
+
+                    // List field definitions
+                    println!("\nField definitions:");
+                    for (tag, def) in ddr.field_defs() {
+                        if !tag.starts_with('0') {
+                            let repeating = if def.is_repeating { " [repeating]" } else { "" };
+                            println!("  {}: {} ({} subfields{})", tag, def.name, def.subfield_count(), repeating);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse DDR: {}", e);
+                }
+            }
         }
     }
-    println!();
+}
+
+fn print_yaml(file: &S57File, record_filter: Option<usize>, limit: usize) {
+    let records = file.records();
+
+    // Filter to specific record if requested
+    let records_to_print: Vec<_> = if let Some(record_num) = record_filter {
+        if record_num < records.len() {
+            vec![&records[record_num]]
+        } else {
+            eprintln!("Error: Record {} not found (file has {} records)", record_num, records.len());
+            std::process::exit(1);
+        }
+    } else {
+        records.iter().collect()
+    };
+
+    // Parse DDR first
+    if let Some(ddr_record) = records.first() {
+        match s57::ddr::DDR::parse(ddr_record) {
+            Ok(ddr) => {
+                print_yaml_structure_with_ddr(&records_to_print, record_filter, limit, &ddr);
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to parse DDR: {}", e);
+                print_yaml_structure(&records_to_print, record_filter, limit);
+            }
+        }
+    } else {
+        print_yaml_structure(&records_to_print, record_filter, limit);
+    }
+}
+
+fn print_hex(file: &S57File, record_filter: Option<usize>) {
+    let records = file.records();
+
+    // Filter to specific record if requested
+    let records_to_print: Vec<_> = if let Some(record_num) = record_filter {
+        if record_num < records.len() {
+            vec![(record_num, &records[record_num])]
+        } else {
+            eprintln!("Error: Record {} not found (file has {} records)", record_num, records.len());
+            std::process::exit(1);
+        }
+    } else {
+        records.iter().enumerate().collect()
+    };
+
+    for (i, record) in records_to_print {
+        let record_type = if record.leader.is_ddr() { "DDR" } else { "DR" };
+        println!("Record {} ({}):", i, record_type);
+        println!("  Leader:");
+        println!("    Length: {} bytes", record.leader.record_length);
+        println!("    Interchange Level: '{}'", record.leader.interchange_level);
+        println!("    Leader ID: '{}'", record.leader.leader_identifier);
+        println!("    Base Address: {}", record.leader.base_address_of_field_area);
+
+        println!("  Fields:");
+        for field in &record.fields {
+            println!("    Tag: {}", field.tag);
+            println!("    Size: {} bytes", field.data.len());
+            println!("    Data:");
+
+            // Print hex dump in rows of 16 bytes
+            for (offset, chunk) in field.data.chunks(16).enumerate() {
+                let hex: String = chunk.iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                let ascii: String = chunk.iter()
+                    .map(|&b| {
+                        if b >= 0x20 && b <= 0x7E {
+                            b as char
+                        } else if b == 0x1E {
+                            '⊣' // field terminator
+                        } else if b == 0x1F {
+                            '⊢' // unit terminator
+                        } else {
+                            '·'
+                        }
+                    })
+                    .collect();
+
+                println!("      {:04x}: {:<48} {}", offset * 16, hex, ascii);
+            }
+            println!();
+        }
+        println!();
+    }
+}
+
+fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filter: Option<usize>, limit: usize, ddr: &s57::ddr::DDR) {
+    use s57::interpret::*;
+
+    // Only show field definitions if not filtering to a specific record
+    if record_filter.is_none() {
+        println!("# Field definitions found in DDR:");
+        for (tag, def) in ddr.field_defs() {
+            if !tag.starts_with('0') {
+                let repeating = if def.is_repeating { " [repeating]" } else { "" };
+                println!("#   {}: {} ({} subfields{})", tag, def.name, def.subfield_count(), repeating);
+            }
+        }
+        println!();
+    }
 
     println!("records:");
-    for (i, record) in records.iter().enumerate().take(limit) {
+    let records_to_show = if record_filter.is_some() { records.len() } else { limit.min(records.len()) };
+    for (idx, record) in records.iter().enumerate().take(records_to_show) {
+        // When filtering, use the actual record number; otherwise use the index
+        let i = record_filter.unwrap_or(idx);
         let record_type = if record.leader.is_ddr() { "DDR (Data Descriptive Record)" } else { "DR (Data Record)" };
 
         println!("  - record_{}:  # {}", i, record_type);
@@ -231,16 +383,19 @@ fn print_yaml_structure_with_ddr(records: &[s57::iso8211::Record], limit: usize,
         println!();
     }
 
-    if records.len() > limit {
+    // Only show "more records" message when not filtering and there are more records
+    if record_filter.is_none() && records.len() > limit {
         println!("  # ... {} more records (use --limit to see more)", records.len() - limit);
     }
 }
 
-fn print_yaml_structure(records: &[s57::iso8211::Record], limit: usize) {
+fn print_yaml_structure(records: &[&s57::iso8211::Record], record_filter: Option<usize>, limit: usize) {
     use s57::interpret::*;
 
-    println!("\nrecords:");
-    for (i, record) in records.iter().enumerate().take(limit) {
+    println!("records:");
+    let records_to_show = if record_filter.is_some() { records.len() } else { limit.min(records.len()) };
+    for (idx, record) in records.iter().enumerate().take(records_to_show) {
+        let i = record_filter.unwrap_or(idx);
         let record_type = if record.leader.is_ddr() { "DDR (Data Descriptive Record)" } else { "DR (Data Record)" };
 
         println!("  - record_{}:  # {}", i, record_type);
@@ -265,7 +420,8 @@ fn print_yaml_structure(records: &[s57::iso8211::Record], limit: usize) {
         println!();
     }
 
-    if records.len() > limit {
+    // Only show "more records" message when not filtering and there are more records
+    if record_filter.is_none() && records.len() > limit {
         println!("  # ... {} more records (use --limit to see more)", records.len() - limit);
     }
 }
