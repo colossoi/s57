@@ -144,7 +144,7 @@ impl DDR {
         let parts: Vec<&[u8]> = field.data.split(|&b| b == 0x1F).collect();
 
         // First part contains field controls (9 bytes) + field name
-        let (field_controls, name) = if !parts.is_empty() && parts[0].len() >= 9 {
+        let (_field_controls, name) = if !parts.is_empty() && parts[0].len() >= 9 {
             let controls = String::from_utf8_lossy(&parts[0][..9]).to_string();
             let field_name = String::from_utf8_lossy(&parts[0][9..]).trim().to_string();
             (controls, field_name)
@@ -405,17 +405,9 @@ impl DDR {
                     break;
                 }
 
-                // Skip unit terminators between subfields ONLY for variable-length fields
-                // Fixed-width binary fields have NO separators - just raw bytes
-                if subfield_def.width.is_none() && data[offset] == 0x1F {
-                    offset += 1;
-                    if offset >= data.len() {
-                        break;
-                    }
-                }
-
                 let value = if let Some(width) = subfield_def.width {
-                    // Fixed width
+                    // Fixed width - read exact number of bytes
+                    // No unit terminators between fixed-width fields
                     let end = (offset + width).min(data.len());
                     let subfield_data = &data[offset..end];
                     offset = end;
@@ -432,11 +424,7 @@ impl DDR {
                         // Optional variable-length ASCII field: use lookahead to detect omission
                         let current_byte = data[offset];
 
-                        if current_byte == 0x1F {
-                            // UT immediately → field is present but empty
-                            // The UT will be consumed at the start of the next iteration
-                            SubfieldValue::String(String::new())
-                        } else if current_byte == 0x1E {
+                        if current_byte == 0x1E {
                             // FT → field and all remaining omitted
                             break;
                         } else {
@@ -460,7 +448,8 @@ impl DDR {
                                 // Field omitted - don't advance offset, skip to next subfield
                                 SubfieldValue::Null
                             } else {
-                                // Read ASCII until UT/FT
+                                // Read ASCII until UT/FT (handles empty case too: if current_byte == 0x1F,
+                                // we read 0 bytes and then consume the UT)
                                 let start = offset;
                                 while offset < data.len()
                                     && data[offset] != 0x1F
@@ -469,11 +458,20 @@ impl DDR {
                                     offset += 1;
                                 }
                                 let subfield_data = &data[start..offset];
-                                Self::parse_subfield_value(
-                                    subfield_data,
-                                    &subfield_def.format,
-                                    &subfield_def.label,
-                                )
+                                // Consume the UT after reading (if present, not FT)
+                                if offset < data.len() && data[offset] == 0x1F {
+                                    offset += 1;
+                                }
+                                // For ASCII fields, empty data = empty string (not null)
+                                if subfield_data.is_empty() {
+                                    SubfieldValue::String(String::new())
+                                } else {
+                                    Self::parse_subfield_value(
+                                        subfield_data,
+                                        &subfield_def.format,
+                                        &subfield_def.label,
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -483,11 +481,25 @@ impl DDR {
                             offset += 1;
                         }
                         let subfield_data = &data[start..offset];
-                        Self::parse_subfield_value(
-                            subfield_data,
-                            &subfield_def.format,
-                            &subfield_def.label,
-                        )
+                        // Consume the UT after reading (if present, not FT)
+                        if offset < data.len() && data[offset] == 0x1F {
+                            offset += 1;
+                        }
+                        // For ASCII fields, empty data = empty string (not null)
+                        if subfield_data.is_empty()
+                            && matches!(
+                                subfield_def.format,
+                                FormatType::Ascii | FormatType::AsciiFixed
+                            )
+                        {
+                            SubfieldValue::String(String::new())
+                        } else {
+                            Self::parse_subfield_value(
+                                subfield_data,
+                                &subfield_def.format,
+                                &subfield_def.label,
+                            )
+                        }
                     }
                 };
 
@@ -522,7 +534,7 @@ impl DDR {
     }
 
     /// Parse a subfield value based on its format and label
-    fn parse_subfield_value(data: &[u8], format: &FormatType, label: &str) -> SubfieldValue {
+    fn parse_subfield_value(data: &[u8], format: &FormatType, _label: &str) -> SubfieldValue {
         if data.is_empty() {
             return SubfieldValue::Null;
         }
@@ -673,7 +685,25 @@ mod tests {
     #[test]
     fn test_parse_full_dsid_from_actual_file() {
         // Full DSID field from US5PVDGD.000 record 1
-        // Based on hex dump: offset 0x65E in the file
+        // Format: (b11,b14,2b11,3A,2A(8),R(4),b11,2A,b11,b12,A)
+        // But note: A(8) in S-57 is actually variable-length with UT terminators!
+        // Hex breakdown:
+        // 0a                       = RCNM (b11) = 10
+        // 01 00 00 00              = RCID (b14) = 1
+        // 01                       = EXPP (b11) = 1
+        // 05                       = INTU (b11) = 5
+        // 55...30 30 30            = DSNM (A) = "US5PVDGD.000"
+        // 1f                       = UT
+        // 34                       = EDTN (A) = "4"
+        // 1f                       = UT
+        // 30                       = UPDN (A) = "0"
+        // 1f                       = UT
+        // 32 30 32 35 30 37 30 33  = UADT (A, not A(8)!) = "20250703"
+        // 32 30 32 35 30 37 30 33  = ISDT (A, not A(8)!) = "20250703"
+        // 30 33 2e 31              = STED (A(4) override) = "03.1"
+        // 01                       = PRSP (b11) = 1
+        // 1f                       = UT
+        // 32 2e 30                 = ... (we're misaligned)
         let field_data: Vec<u8> = vec![
             0x0a, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x55, 0x53, 0x35, 0x50, 0x56, 0x44, 0x47,
             0x44, 0x2e, 0x30, 0x30, 0x30, 0x1f, 0x34, 0x1f, 0x30, 0x1f, 0x32, 0x30, 0x32, 0x35,
@@ -688,7 +718,19 @@ mod tests {
                 .to_string();
         let format_controls = "(b11,b14,2b11,3A,2A(8),R(4),b11,2A,b11,b12,A)".to_string();
 
-        let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
+        let mut subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
+
+        // Create schema and apply overrides (simulating what DDR::parse does)
+        let schema = OverrideSchema::new();
+        for subfield in &mut subfields {
+            if let Some(override_format) = schema.get_format_override("DSID", &subfield.label) {
+                subfield.format = override_format;
+                // For AsciiFixed, ensure width is set correctly
+                if matches!(override_format, FormatType::AsciiFixed) && subfield.width.is_none() {
+                    subfield.width = Some(4);
+                }
+            }
+        }
 
         let field_def = FieldDef {
             tag: "DSID".to_string(),
@@ -701,7 +743,7 @@ mod tests {
 
         let mut ddr = DDR {
             field_defs: std::collections::HashMap::new(),
-            schema: OverrideSchema::new(),
+            schema,
         };
         ddr.field_defs.insert("DSID".to_string(), field_def);
 
@@ -726,6 +768,115 @@ mod tests {
         println!("\nFull DSID field parsing from actual file:");
         for (label, value) in group {
             println!("  {}: {:?}", label, value);
+        }
+
+        // Validate expected values
+        // RCNM should be 10
+        let rcnm = group.iter().find(|(label, _)| label == "RCNM");
+        assert!(rcnm.is_some(), "RCNM not found");
+        if let Some((_, SubfieldValue::Integer(val))) = rcnm {
+            assert_eq!(*val, 10, "RCNM should be 10");
+        }
+
+        // DSNM should be "US5PVDGD.000"
+        let dsnm = group.iter().find(|(label, _)| label == "DSNM");
+        assert!(dsnm.is_some(), "DSNM not found");
+        if let Some((_, SubfieldValue::String(val))) = dsnm {
+            assert_eq!(val, "US5PVDGD.000", "DSNM should be 'US5PVDGD.000'");
+        }
+
+        // UADT should be "20250703" (8 characters)
+        let uadt = group.iter().find(|(label, _)| label == "UADT");
+        assert!(uadt.is_some(), "UADT not found");
+        if let Some((_, value)) = uadt {
+            if let SubfieldValue::String(val) = value {
+                assert_eq!(val.len(), 8, "UADT should be 8 characters, got: '{}'", val);
+                assert_eq!(val, "20250703", "UADT should be '20250703', got: '{}'", val);
+            } else {
+                panic!("UADT should be a string, got {:?}", value);
+            }
+        }
+
+        // ISDT should be "20250703" (8 characters)
+        let isdt = group.iter().find(|(label, _)| label == "ISDT");
+        assert!(isdt.is_some(), "ISDT not found");
+        if let Some((_, value)) = isdt {
+            if let SubfieldValue::String(val) = value {
+                assert_eq!(val.len(), 8, "ISDT should be 8 characters, got: '{}'", val);
+                assert_eq!(val, "20250703", "ISDT should be '20250703', got: '{}'", val);
+            } else {
+                panic!("ISDT should be a string, got {:?}", value);
+            }
+        }
+
+        // STED should be "03.1" (4 characters after format override)
+        let sted = group.iter().find(|(label, _)| label == "STED");
+        assert!(sted.is_some(), "STED not found");
+        if let Some((_, value)) = sted {
+            if let SubfieldValue::String(val) = value {
+                assert_eq!(val, "03.1", "STED should be '03.1', got: '{}'", val);
+            } else {
+                panic!("STED should be a string, got {:?}", value);
+            }
+        }
+
+        // PRSP should be 1 (b11)
+        let prsp = group.iter().find(|(label, _)| label == "PRSP");
+        assert!(prsp.is_some(), "PRSP not found");
+        if let Some((_, SubfieldValue::Integer(val))) = prsp {
+            assert_eq!(*val, 1, "PRSP should be 1, got: {}", val);
+        } else {
+            panic!("PRSP should be an integer");
+        }
+
+        // PSDN should be empty string (optional, present but empty - just UT with no content)
+        let psdn = group.iter().find(|(label, _)| label == "PSDN");
+        assert!(psdn.is_some(), "PSDN not found");
+        if let Some((_, value)) = psdn {
+            if let SubfieldValue::String(val) = value {
+                assert_eq!(val, "", "PSDN should be empty string, got: '{}'", val);
+            } else {
+                panic!("PSDN should be a string (empty), got {:?}", value);
+            }
+        }
+
+        // PRED is optional and may be empty string or omitted
+        // In this file it appears to be empty
+        let pred = group.iter().find(|(label, _)| label == "PRED");
+        assert!(pred.is_some(), "PRED not found");
+        // Just check it exists, value can vary
+
+        // PROF should be 1 (b11) for ENC profile
+        let prof = group.iter().find(|(label, _)| label == "PROF");
+        assert!(prof.is_some(), "PROF not found");
+        if let Some((_, SubfieldValue::Integer(val))) = prof {
+            assert_eq!(*val, 1, "PROF should be 1 for ENC, got: {}", val);
+        } else {
+            panic!("PROF should be an integer");
+        }
+
+        // AGEN should be 550 (b12) for NOAA
+        let agen = group.iter().find(|(label, _)| label == "AGEN");
+        assert!(agen.is_some(), "AGEN not found");
+        if let Some((_, SubfieldValue::Integer(val))) = agen {
+            assert_eq!(*val, 550, "AGEN should be 550 for NOAA, got: {}", val);
+        } else {
+            panic!("AGEN should be an integer");
+        }
+
+        // COMT should be "Produced by NOAA"
+        let comt = group.iter().find(|(label, _)| label == "COMT");
+        assert!(comt.is_some(), "COMT not found");
+        if let Some((_, value)) = comt {
+            if let SubfieldValue::String(val) = value {
+                assert_eq!(
+                    val, "Produced by NOAA",
+                    "COMT should be 'Produced by NOAA', got: '{}'",
+                    val
+                );
+            } else {
+                panic!("COMT should be a string, got {:?}", value);
+            }
         }
     }
 
