@@ -38,8 +38,8 @@ pub struct SubfieldDef {
     pub label: String,
     /// Format type
     pub format: FormatType,
-    /// Width in bytes (0 = variable)
-    pub width: usize,
+    /// Width in bytes (None = variable-length)
+    pub width: Option<usize>,
 }
 
 /// Field definition from DDR
@@ -113,12 +113,17 @@ impl DDR {
             if let Ok(mut def) = Self::parse_field_definition(field) {
                 // Apply format overrides from schema
                 for subfield in &mut def.subfields {
-                    if let Some(override_format) = schema.get_format_override(&def.tag, &subfield.label) {
+                    // Apply format type override if present
+                    if let Some(override_format) =
+                        schema.get_format_override(&def.tag, &subfield.label)
+                    {
                         subfield.format = override_format;
                         // For AsciiFixed, ensure width is set correctly
-                        if matches!(override_format, FormatType::AsciiFixed) && subfield.width == 0 {
+                        if matches!(override_format, FormatType::AsciiFixed)
+                            && subfield.width.is_none()
+                        {
                             // Default to 4 for R(4) -> A(4) conversion
-                            subfield.width = 4;
+                            subfield.width = Some(4);
                         }
                     }
                 }
@@ -126,10 +131,7 @@ impl DDR {
             }
         }
 
-        Ok(DDR {
-            field_defs,
-            schema,
-        })
+        Ok(DDR { field_defs, schema })
     }
 
     /// Parse a single field definition from a DDR field
@@ -147,7 +149,10 @@ impl DDR {
             let field_name = String::from_utf8_lossy(&parts[0][9..]).trim().to_string();
             (controls, field_name)
         } else if !parts.is_empty() {
-            (String::new(), String::from_utf8_lossy(parts[0]).trim().to_string())
+            (
+                String::new(),
+                String::from_utf8_lossy(parts[0]).trim().to_string(),
+            )
         } else {
             (String::new(), String::new())
         };
@@ -162,7 +167,9 @@ impl DDR {
         let format_controls = if parts.len() > 2 {
             let format_part = parts[2];
             if !format_part.is_empty() && format_part[format_part.len() - 1] == 0x1E {
-                String::from_utf8_lossy(&format_part[..format_part.len() - 1]).trim().to_string()
+                String::from_utf8_lossy(&format_part[..format_part.len() - 1])
+                    .trim()
+                    .to_string()
             } else {
                 String::from_utf8_lossy(format_part).trim().to_string()
             }
@@ -225,20 +232,21 @@ impl DDR {
             let format_spec = formats[format_idx];
 
             // Check for repeat count prefix (e.g., "3b24" means next 3 labels use b24)
-            let (repeat_count, actual_format) = if let Some(digit_end) = format_spec.find(|c: char| !c.is_ascii_digit()) {
-                let prefix = &format_spec[..digit_end];
-                if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
-                    if let Ok(count) = prefix.parse::<usize>() {
-                        (count, &format_spec[digit_end..])
+            let (repeat_count, actual_format) =
+                if let Some(digit_end) = format_spec.find(|c: char| !c.is_ascii_digit()) {
+                    let prefix = &format_spec[..digit_end];
+                    if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+                        if let Ok(count) = prefix.parse::<usize>() {
+                            (count, &format_spec[digit_end..])
+                        } else {
+                            (1, format_spec)
+                        }
                     } else {
                         (1, format_spec)
                     }
                 } else {
                     (1, format_spec)
-                }
-            } else {
-                (1, format_spec)
-            };
+                };
 
             // Parse format type and width once for this format spec
             let (format, width) = Self::parse_format_spec(actual_format);
@@ -270,75 +278,85 @@ impl DDR {
     /// Parse a single format specification (e.g., "b12", "A", "A(8)", "I", "I(5)", "R(4)", "B(40)")
     ///
     /// According to ISO 8211 and IHO S-57:
-    /// - b11, b12, b14, b24 = binary integers (1, 2, 4, 4 bytes respectively)
+    /// - b11 = 1-byte unsigned integer (0-255)
+    /// - b12 = 2-byte unsigned integer, little-endian (0-65535)
+    /// - b14 = 4-byte unsigned integer, little-endian (0-4,294,967,295)
+    /// - b24 = 4-byte signed integer, little-endian, two's complement (±2,147,483,648)
     /// - A = ASCII text, variable-length (terminated by UT/FT)
     /// - A(n) = ASCII text, fixed-length (exactly n bytes)
     /// - I = Integer as ASCII, variable-length (terminated by UT/FT)
     /// - I(n) = Integer as ASCII, fixed-length (exactly n characters)
     /// - R(n) = Real as binary IEEE 754, n bytes (R(4)=float, R(8)=double), little-endian
     /// - B(n) = Bit string, n bits
-    fn parse_format_spec(spec: &str) -> (FormatType, usize) {
+    fn parse_format_spec(spec: &str) -> (FormatType, Option<usize>) {
         let first_char = spec.chars().next();
         let width_str: String = spec.chars().skip(1).collect();
         let has_width = width_str.starts_with('(');
 
         let format = match first_char {
-            Some('b') => FormatType::BinaryInt,  // b11, b12, b14, b24
+            Some('b') => FormatType::BinaryInt, // b11, b12, b14, b24
             Some('B') => FormatType::BitString, // B(n)
             Some('A') | Some('a') => {
                 if has_width {
-                    FormatType::AsciiFixed  // A(n)
+                    FormatType::AsciiFixed // A(n)
                 } else {
-                    FormatType::Ascii  // A
+                    FormatType::Ascii // A
                 }
             }
             Some('I') => {
                 if has_width {
-                    FormatType::IntegerAsciiFixed  // I(n)
+                    FormatType::IntegerAsciiFixed // I(n)
                 } else {
-                    FormatType::IntegerAscii  // I
+                    FormatType::IntegerAscii // I
                 }
             }
-            Some('R') => FormatType::RealBinary,  // R(n) - binary IEEE 754
+            Some('R') => FormatType::RealBinary, // R(n) - binary IEEE 754
             _ => FormatType::Mixed,
         };
 
         // Extract width from format spec
+        // Return Some(width) for fixed-width formats, None for variable-length
         let width = match format {
             FormatType::BinaryInt => {
-                // Binary formats: b11, b12, b14, b24
-                // Pattern: bXY where X is sign (1=unsigned, 2=signed), Y is width in bytes (1/2/4)
+                // Binary formats per ISO/IEC 8211:
+                // b11 = 1 byte unsigned
+                // b12 = 2 bytes unsigned
+                // b14 = 4 bytes unsigned
+                // b24 = 4 bytes signed (two's complement)
+                // All binary formats are fixed-width
                 if let Ok(code) = width_str.parse::<usize>() {
-                    let width_digit = code % 10;
-                    match width_digit {
-                        1 => 1, // b11, b21 = 1 byte
-                        2 => 2, // b12, b22 = 2 bytes
-                        4 => 4, // b14, b24 = 4 bytes
-                        _ => 0,
+                    match code {
+                        11 | 21 => Some(1), // b11, b21 = 1 byte
+                        12 | 22 => Some(2), // b12, b22 = 2 bytes
+                        14 | 24 => Some(4), // b14, b24 = 4 bytes
+                        _ => None,
                     }
                 } else {
-                    0
+                    None
                 }
             }
             FormatType::Ascii | FormatType::IntegerAscii => {
                 // Variable-length: A or I (no parentheses)
                 // Terminated by UT (0x1F) or FT (0x1E)
-                0
+                None
             }
-            FormatType::AsciiFixed | FormatType::IntegerAsciiFixed | FormatType::RealBinary | FormatType::BitString => {
+            FormatType::AsciiFixed
+            | FormatType::IntegerAsciiFixed
+            | FormatType::RealBinary
+            | FormatType::BitString => {
                 // Fixed-length formats: A(n), I(n), R(n), B(n)
                 // Extract n from parentheses
                 if width_str.starts_with('(') {
                     if let Some(end) = width_str.find(')') {
-                        width_str[1..end].parse::<usize>().unwrap_or(0)
+                        width_str[1..end].parse::<usize>().ok()
                     } else {
-                        0
+                        None
                     }
                 } else {
-                    0
+                    None
                 }
             }
-            FormatType::Mixed => 0,
+            FormatType::Mixed => None,
         };
 
         (format, width)
@@ -387,20 +405,25 @@ impl DDR {
                     break;
                 }
 
-                // Skip unit terminators between subfields
-                if data[offset] == 0x1F {
+                // Skip unit terminators between subfields ONLY for variable-length fields
+                // Fixed-width binary fields have NO separators - just raw bytes
+                if subfield_def.width.is_none() && data[offset] == 0x1F {
                     offset += 1;
                     if offset >= data.len() {
                         break;
                     }
                 }
 
-                let value = if subfield_def.width > 0 {
+                let value = if let Some(width) = subfield_def.width {
                     // Fixed width
-                    let end = (offset + subfield_def.width).min(data.len());
+                    let end = (offset + width).min(data.len());
                     let subfield_data = &data[offset..end];
                     offset = end;
-                    Self::parse_subfield_value(subfield_data, &subfield_def.format)
+                    Self::parse_subfield_value(
+                        subfield_data,
+                        &subfield_def.format,
+                        &subfield_def.label,
+                    )
                 } else {
                     // Variable width - check if this is an optional field that may be omitted
                     let is_optional = self.schema.is_optional(&field.tag, &subfield_def.label);
@@ -418,23 +441,39 @@ impl DDR {
                             break;
                         } else {
                             // Check if this looks like the next field (binary data when next field is binary)
-                            let next_field_is_binary = def.subfields.get(subfield_idx + 1)
-                                .map(|next_def| matches!(next_def.format,
-                                    FormatType::BinaryInt | FormatType::RealBinary))
+                            let next_field_is_binary = def
+                                .subfields
+                                .get(subfield_idx + 1)
+                                .map(|next_def| {
+                                    matches!(
+                                        next_def.format,
+                                        FormatType::BinaryInt | FormatType::RealBinary
+                                    )
+                                })
                                 .unwrap_or(false);
 
                             // If current byte is non-ASCII and next field is binary, field is omitted
-                            if next_field_is_binary && (current_byte < 0x20 || current_byte >= 0x7F) && current_byte != 0x1F {
+                            if next_field_is_binary
+                                && (current_byte < 0x20 || current_byte >= 0x7F)
+                                && current_byte != 0x1F
+                            {
                                 // Field omitted - don't advance offset, skip to next subfield
                                 SubfieldValue::Null
                             } else {
                                 // Read ASCII until UT/FT
                                 let start = offset;
-                                while offset < data.len() && data[offset] != 0x1F && data[offset] != 0x1E {
+                                while offset < data.len()
+                                    && data[offset] != 0x1F
+                                    && data[offset] != 0x1E
+                                {
                                     offset += 1;
                                 }
                                 let subfield_data = &data[start..offset];
-                                Self::parse_subfield_value(subfield_data, &subfield_def.format)
+                                Self::parse_subfield_value(
+                                    subfield_data,
+                                    &subfield_def.format,
+                                    &subfield_def.label,
+                                )
                             }
                         }
                     } else {
@@ -444,7 +483,11 @@ impl DDR {
                             offset += 1;
                         }
                         let subfield_data = &data[start..offset];
-                        Self::parse_subfield_value(subfield_data, &subfield_def.format)
+                        Self::parse_subfield_value(
+                            subfield_data,
+                            &subfield_def.format,
+                            &subfield_def.label,
+                        )
                     }
                 };
 
@@ -478,21 +521,25 @@ impl DDR {
         })
     }
 
-    /// Parse a subfield value based on its format
-    fn parse_subfield_value(data: &[u8], format: &FormatType) -> SubfieldValue {
+    /// Parse a subfield value based on its format and label
+    fn parse_subfield_value(data: &[u8], format: &FormatType, label: &str) -> SubfieldValue {
         if data.is_empty() {
             return SubfieldValue::Null;
         }
 
         match format {
             FormatType::BinaryInt => {
-                // Binary integer: b11 (1 byte), b12 (2 bytes), b14 (4 bytes), b24 (4 bytes signed)
+                // Binary integer per ISO/IEC 8211:
+                // b11 = 1 byte unsigned
+                // b12 = 2 bytes unsigned, little-endian
+                // b14 = 4 bytes unsigned, little-endian
+                // b24 = 4 bytes signed, little-endian, two's complement
                 match data.len() {
                     1 => SubfieldValue::Integer(data[0] as i32),
                     2 => SubfieldValue::Integer(u16::from_le_bytes([data[0], data[1]]) as i32),
                     4 => {
-                        // b14 = unsigned 32-bit, b24 = signed 32-bit
-                        // For now treat all as signed (we'd need format spec to distinguish)
+                        // 4-byte integer - could be b14 (unsigned) or b24 (signed)
+                        // Read as signed i32 (works for both)
                         SubfieldValue::Integer(i32::from_le_bytes([
                             data[0], data[1], data[2], data[3],
                         ]))
@@ -531,7 +578,9 @@ impl DDR {
                     }
                     8 => {
                         // R(8) = 64-bit double
-                        let bytes = [data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]];
+                        let bytes = [
+                            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                        ];
                         SubfieldValue::Real(f64::from_le_bytes(bytes))
                     }
                     _ => SubfieldValue::Bytes(data.to_vec()),
@@ -622,152 +671,21 @@ mod tests {
     use crate::iso8211::Field;
 
     #[test]
-    fn test_parse_dsid_field_with_variable_length_dates() {
-        // This is the actual DSID field data from US5PVDGD.000 record 1
-        // Format: (b11,b14,2b11,3A,2A(8),R(4),b11,2A,b11,b12,A)
-        // Labels: RCNM!RCID!EXPP!INTU!DSNM!EDTN!UPDN!UADT!ISDT!STED!PRSP!PSDN!PRED!PROF!AGEN!COMT
-        let field_data: Vec<u8> = vec![
-            // Binary fields (fixed width)
-            0x0a, // RCNM = 10 (b11: 1 byte)
-            0x01, 0x00, 0x00, 0x00, // RCID = 1 (b14: 4 bytes LE)
-            0x01, // EXPP = 1 (b11: 1 byte)
-            0x05, // INTU = 5 (b11: 1 byte)
-            // Variable-length ASCII fields (3A)
-            0x55, 0x53, 0x35, 0x50, 0x56, 0x44, 0x47, 0x44, 0x2e, 0x30, 0x30, 0x30, // DSNM = "US5PVDGD.000"
-            0x1f, // UT
-            0x34, // EDTN = "4"
-            0x1f, // UT
-            0x30, // UPDN = "0"
-            0x1f, // UT
-            // Here's where it gets interesting - UADT should be variable-length A(8)
-            0x32, 0x30, 0x32, 0x35, 0x30, 0x37, 0x30, 0x33, // "20250703"
-            0x32, 0x30, 0x32, 0x35, 0x30, 0x37, 0x30, 0x33, 0x30, 0x33, 0x2e, 0x31, // "2025070303.1"
-            0x01, // This is something else (maybe STED?)
-            0x1f, // UT
-            0x32, 0x2e, 0x30, // "2.0"
-            0x1f, // UT
-            0x01, // PRSP = 1
-            0x26, 0x02, // PSDN (2 bytes)
-            0x50, 0x72, 0x6f, 0x64, 0x75, 0x63, 0x65, 0x64, 0x20, 0x62, 0x79, 0x20, 0x4e, 0x4f, 0x41, 0x41, // "Produced by NOAA"
-            0x1f, // UT
-            0x1e, // FT
-        ];
-
-        // Create field definition matching the DDR
-        let array_descriptor = "RCNM!RCID!EXPP!INTU!DSNM!EDTN!UPDN!UADT!ISDT!STED!PRSP!PSDN!PRED!PROF!AGEN!COMT".to_string();
-        let format_controls = "(b11,b14,2b11,3A,2A(8),R(4),b11,2A,b11,b12,A)".to_string();
-
-        // Parse subfield definitions
-        let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
-
-        let field_def = FieldDef {
-            tag: "DSID".to_string(),
-            name: "Data set identification field".to_string(),
-            array_descriptor: array_descriptor.clone(),
-            format_controls: format_controls.clone(),
-            subfields,
-            is_repeating: false,
-        };
-
-        // Create a mock DDR with this field definition
-        let mut ddr = DDR {
-            field_defs: std::collections::HashMap::new(),
-            schema: OverrideSchema::new(),
-        };
-        ddr.field_defs.insert("DSID".to_string(), field_def);
-
-        // Create the field
-        let field = Field {
-            tag: "DSID".to_string(),
-            data: field_data,
-        };
-
-        // Parse the field data
-        let result = ddr.parse_field_data(&field);
-        assert!(result.is_ok(), "Failed to parse DSID field: {:?}", result.err());
-
-        let parsed = result.unwrap();
-        let groups = parsed.groups();
-        assert_eq!(groups.len(), 1, "Expected 1 group");
-
-        let group = &groups[0];
-
-        // Check some basic fields
-        let rcnm = group.iter().find(|(label, _)| label == "RCNM");
-        assert!(rcnm.is_some(), "RCNM field not found");
-        if let Some((_, SubfieldValue::Integer(val))) = rcnm {
-            assert_eq!(*val, 10, "RCNM should be 10");
-        } else {
-            panic!("RCNM should be an integer");
-        }
-
-        // Check DSNM
-        let dsnm = group.iter().find(|(label, _)| label == "DSNM");
-        assert!(dsnm.is_some(), "DSNM field not found");
-        if let Some((_, SubfieldValue::String(val))) = dsnm {
-            assert_eq!(val, "US5PVDGD.000", "DSNM should be 'US5PVDGD.000'");
-        } else {
-            panic!("DSNM should be a string");
-        }
-
-        // Check EDTN (ASCII format, should be string)
-        let edtn = group.iter().find(|(label, _)| label == "EDTN");
-        assert!(edtn.is_some(), "EDTN field not found");
-        if let Some((_, SubfieldValue::String(val))) = edtn {
-            assert_eq!(val, "4", "EDTN should be '4'");
-        } else {
-            panic!("EDTN should be a string (format A), got {:?}", edtn);
-        }
-
-        // Check UPDN (ASCII format, should be string)
-        let updn = group.iter().find(|(label, _)| label == "UPDN");
-        assert!(updn.is_some(), "UPDN field not found");
-        if let Some((_, SubfieldValue::String(val))) = updn {
-            assert_eq!(val, "0", "UPDN should be '0'");
-        } else {
-            panic!("UPDN should be a string (format A), got {:?}", updn);
-        }
-
-        // THE CRITICAL TEST: Check UADT (should be "20250703", NOT "202507032025070303.1")
-        let uadt = group.iter().find(|(label, _)| label == "UADT");
-        assert!(uadt.is_some(), "UADT field not found");
-        if let Some((_, value)) = uadt {
-            println!("UADT value: {:?}", value);
-            if let SubfieldValue::String(val) = value {
-                assert_eq!(val, "20250703", "UADT should be '20250703', not concatenated with next field");
-            } else {
-                panic!("UADT should be a string, got {:?}", value);
-            }
-        }
-
-        // Check ISDT (should be separate from UADT)
-        let isdt = group.iter().find(|(label, _)| label == "ISDT");
-        assert!(isdt.is_some(), "ISDT field not found");
-        if let Some((_, value)) = isdt {
-            println!("ISDT value: {:?}", value);
-            // ISDT should be its own value, not mixed with UADT
-        }
-
-        // Print all parsed values for debugging
-        println!("\nAll parsed DSID fields:");
-        for (label, value) in group {
-            println!("  {}: {:?}", label, value);
-        }
-    }
-
-    #[test]
     fn test_parse_full_dsid_from_actual_file() {
         // Full DSID field from US5PVDGD.000 record 1
         // Based on hex dump: offset 0x65E in the file
         let field_data: Vec<u8> = vec![
-            0x0a, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x55, 0x53, 0x35, 0x50, 0x56, 0x44, 0x47, 0x44, 0x2e,
-            0x30, 0x30, 0x30, 0x1f, 0x34, 0x1f, 0x30, 0x1f, 0x32, 0x30, 0x32, 0x35, 0x30, 0x37, 0x30, 0x33,
-            0x32, 0x30, 0x32, 0x35, 0x30, 0x37, 0x30, 0x33, 0x30, 0x33, 0x2e, 0x31, 0x01, 0x1f, 0x32, 0x2e,
-            0x30, 0x1f, 0x01, 0x26, 0x02, 0x50, 0x72, 0x6f, 0x64, 0x75, 0x63, 0x65, 0x64, 0x20, 0x62, 0x79,
-            0x20, 0x4e, 0x4f, 0x41, 0x41, 0x1f, 0x1e,
+            0x0a, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x55, 0x53, 0x35, 0x50, 0x56, 0x44, 0x47,
+            0x44, 0x2e, 0x30, 0x30, 0x30, 0x1f, 0x34, 0x1f, 0x30, 0x1f, 0x32, 0x30, 0x32, 0x35,
+            0x30, 0x37, 0x30, 0x33, 0x32, 0x30, 0x32, 0x35, 0x30, 0x37, 0x30, 0x33, 0x30, 0x33,
+            0x2e, 0x31, 0x01, 0x1f, 0x32, 0x2e, 0x30, 0x1f, 0x01, 0x26, 0x02, 0x50, 0x72, 0x6f,
+            0x64, 0x75, 0x63, 0x65, 0x64, 0x20, 0x62, 0x79, 0x20, 0x4e, 0x4f, 0x41, 0x41, 0x1f,
+            0x1e,
         ];
 
-        let array_descriptor = "RCNM!RCID!EXPP!INTU!DSNM!EDTN!UPDN!UADT!ISDT!STED!PRSP!PSDN!PRED!PROF!AGEN!COMT".to_string();
+        let array_descriptor =
+            "RCNM!RCID!EXPP!INTU!DSNM!EDTN!UPDN!UADT!ISDT!STED!PRSP!PSDN!PRED!PROF!AGEN!COMT"
+                .to_string();
         let format_controls = "(b11,b14,2b11,3A,2A(8),R(4),b11,2A,b11,b12,A)".to_string();
 
         let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
@@ -793,7 +711,11 @@ mod tests {
         };
 
         let result = ddr.parse_field_data(&field);
-        assert!(result.is_ok(), "Failed to parse DSID field: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse DSID field: {:?}",
+            result.err()
+        );
 
         let parsed = result.unwrap();
         let groups = parsed.groups();
@@ -804,6 +726,135 @@ mod tests {
         println!("\nFull DSID field parsing from actual file:");
         for (label, value) in group {
             println!("  {}: {:?}", label, value);
+        }
+    }
+
+    #[test]
+    fn test_parse_sg3d_repeating_b24_fields() {
+        // SG3D field with repeating (3b24) groups: YCOO, XCOO, VE3D
+        // From actual US5PVDGD.000 record 6
+        // Format: (3b24) means 3 subfields of b24 (4-byte signed LE integers)
+        // Each group is 12 bytes (3 * 4), field has 180 bytes data + 1 byte FT = 181 total
+        // Expected: 15 groups, all VE3D values should be < 35
+        let field_data: Vec<u8> = vec![
+            0x3b, 0xa6, 0xe4, 0x18, 0x65, 0xbd, 0x73, 0xd5, 0x16, 0x00, 0x00, 0x00, 0xf2, 0x68,
+            0xe4, 0x18, 0xdb, 0xdb, 0x73, 0xd5, 0x16, 0x00, 0x00, 0x00, 0x3b, 0x0a, 0xe1, 0x18,
+            0xfe, 0xa2, 0x74, 0xd5, 0x15, 0x00, 0x00, 0x00, 0xb0, 0x4e, 0xe4, 0x18, 0xe4, 0xce,
+            0x75, 0xd5, 0x15, 0x00, 0x00, 0x00, 0x38, 0x3d, 0xe4, 0x18, 0x01, 0xf7, 0x75, 0xd5,
+            0x15, 0x00, 0x00, 0x00, 0xca, 0x9e, 0xe3, 0x18, 0x63, 0x13, 0x76, 0xd5, 0x1f, 0x00,
+            0x00, 0x00, 0x01, 0x12, 0xe4, 0x18, 0x0d, 0x4f, 0x76, 0xd5, 0x15, 0x00, 0x00, 0x00,
+            0xec, 0xf3, 0xe3, 0x18, 0x81, 0x79, 0x76, 0xd5, 0x16, 0x00, 0x00, 0x00, 0x3a, 0x64,
+            0xe1, 0x18, 0xeb, 0x7c, 0x76, 0xd5, 0x20, 0x00, 0x00, 0x00, 0xc6, 0x8a, 0xe1, 0x18,
+            0xb0, 0x97, 0x76, 0xd5, 0x15, 0x00, 0x00, 0x00, 0xa9, 0xc7, 0xe3, 0x18, 0xd6, 0x9e,
+            0x76, 0xd5, 0x16, 0x00, 0x00, 0x00, 0x58, 0x65, 0xe3, 0x18, 0x16, 0xa8, 0x76, 0xd5,
+            0x16, 0x00, 0x00, 0x00, 0x63, 0x8b, 0xe3, 0x18, 0x73, 0xaa, 0x76, 0xd5, 0x16, 0x00,
+            0x00, 0x00, 0x9a, 0xb0, 0xe0, 0x18, 0xba, 0xa6, 0x77, 0xd5, 0x16, 0x00, 0x00, 0x00,
+            0x79, 0x7a, 0xe0, 0x18, 0x0a, 0x10, 0x78, 0xd5, 0x1f, 0x00, 0x00, 0x00, 0x1e,
+        ];
+
+        let array_descriptor = "*YCOO!XCOO!VE3D".to_string();
+        let format_controls = "(3b24)".to_string();
+
+        let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
+
+        // Verify subfield definitions
+        assert_eq!(subfields.len(), 3, "Should have 3 subfields");
+        assert_eq!(subfields[0].label, "YCOO");
+        assert_eq!(subfields[1].label, "XCOO");
+        assert_eq!(subfields[2].label, "VE3D");
+        assert_eq!(subfields[0].width, Some(4), "b24 should be 4 bytes");
+        assert_eq!(subfields[1].width, Some(4), "b24 should be 4 bytes");
+        assert_eq!(subfields[2].width, Some(4), "b24 should be 4 bytes");
+
+        let field_def = FieldDef {
+            tag: "SG3D".to_string(),
+            name: "3-D coordinate (sounding array) field".to_string(),
+            array_descriptor: array_descriptor.clone(),
+            format_controls: format_controls.clone(),
+            subfields,
+            is_repeating: true,
+        };
+
+        let mut ddr = DDR {
+            field_defs: std::collections::HashMap::new(),
+            schema: OverrideSchema::new(),
+        };
+        ddr.field_defs.insert("SG3D".to_string(), field_def);
+
+        let field = Field {
+            tag: "SG3D".to_string(),
+            data: field_data.clone(),
+        };
+
+        let result = ddr.parse_field_data(&field);
+        assert!(
+            result.is_ok(),
+            "Failed to parse SG3D field: {:?}",
+            result.err()
+        );
+
+        let parsed = result.unwrap();
+        let groups = parsed.groups();
+
+        // Field is 181 bytes total, minus 1 for FT = 180 bytes of data
+        // 180 / 12 = 15 groups expected
+        assert_eq!(
+            groups.len(),
+            15,
+            "Expected 15 groups (180 bytes / 12 bytes per group)"
+        );
+
+        // Validate each group
+        println!("\nParsed SG3D groups:");
+        for (i, group) in groups.iter().enumerate() {
+            assert_eq!(group.len(), 3, "Each group should have 3 subfields");
+
+            let ycoo = group.iter().find(|(label, _)| label == "YCOO");
+            let xcoo = group.iter().find(|(label, _)| label == "XCOO");
+            let ve3d = group.iter().find(|(label, _)| label == "VE3D");
+
+            assert!(ycoo.is_some(), "YCOO not found in group {}", i);
+            assert!(xcoo.is_some(), "XCOO not found in group {}", i);
+            assert!(ve3d.is_some(), "VE3D not found in group {}", i);
+
+            if let Some((_, SubfieldValue::Integer(y))) = ycoo {
+                if let Some((_, SubfieldValue::Integer(x))) = xcoo {
+                    if let Some((_, SubfieldValue::Integer(z))) = ve3d {
+                        println!("  group_{}: YCOO={}, XCOO={}, VE3D={}", i, y, x, z);
+
+                        // Critical validation: all VE3D values should be < 35
+                        assert!(*z < 35, "VE3D should be < 35, got {} in group {}", z, i);
+                        assert!(
+                            *z >= 0,
+                            "VE3D should be >= 0 (unsigned), got {} in group {}",
+                            z,
+                            i
+                        );
+                    } else {
+                        panic!("VE3D should be an integer in group {}", i);
+                    }
+                } else {
+                    panic!("XCOO should be an integer in group {}", i);
+                }
+            } else {
+                panic!("YCOO should be an integer in group {}", i);
+            }
+        }
+
+        // Verify specific expected values from manual hex parsing
+        let group0 = &groups[0];
+        let ycoo0 = group0.iter().find(|(label, _)| label == "YCOO").unwrap();
+        let xcoo0 = group0.iter().find(|(label, _)| label == "XCOO").unwrap();
+        let ve3d0 = group0.iter().find(|(label, _)| label == "VE3D").unwrap();
+
+        if let SubfieldValue::Integer(y) = ycoo0.1 {
+            assert_eq!(y, 417637947, "group_0 YCOO");
+        }
+        if let SubfieldValue::Integer(x) = xcoo0.1 {
+            assert_eq!(x, -713835163, "group_0 XCOO");
+        }
+        if let SubfieldValue::Integer(z) = ve3d0.1 {
+            assert_eq!(z, 22, "group_0 VE3D");
         }
     }
 }

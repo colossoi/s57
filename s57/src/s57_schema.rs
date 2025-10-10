@@ -7,8 +7,8 @@
 //! based on context (record type). By default, all subfields are required unless
 //! explicitly marked as optional.
 
-use std::collections::{HashMap, HashSet};
 use crate::ddr::FormatType;
+use std::collections::{HashMap, HashSet};
 
 /// Override schema database for ISO 8211 parsing
 /// Contains field-specific metadata not present in the DDR
@@ -50,7 +50,7 @@ impl OverrideSchema {
         let mut dsid_optional = HashSet::new();
         dsid_optional.insert("PSDN".to_string());
         dsid_optional.insert("PRED".to_string());
-        dsid_optional.insert("UADT".to_string());  // optional in ER context
+        dsid_optional.insert("UADT".to_string()); // optional in ER context
         dsid_optional.insert("COMT".to_string());
         optional_subfields.insert("DSID".to_string(), dsid_optional);
 
@@ -60,7 +60,7 @@ impl OverrideSchema {
         // representation of a real number (e.g., "03.1"), not binary IEEE 754.
         format_overrides.insert(
             ("DSID".to_string(), "STED".to_string()),
-            FormatType::AsciiFixed
+            FormatType::AsciiFixed,
         );
 
         // TODO: Add other fields as we discover their optional subfields
