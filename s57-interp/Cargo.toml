@@ -15,5 +15,8 @@ num-traits = "0.2"
 # ECS entity management
 slotmap = "1.0"
 
+# Logging
+log = "0.4"
+
 # Serde for diagnostics and caching
 serde = { version = "1.0", features = ["derive"], optional = true }

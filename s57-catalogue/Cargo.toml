@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# No dependencies - pure type definitions and lookup tables
+# Enum string conversion and iteration
+strum = "0.26"
+strum_macros = "0.26"

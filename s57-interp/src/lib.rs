@@ -95,11 +95,35 @@ pub fn build_world(file: &S57File) -> Result<World> {
     }
 
     // Second pass: Create entities from VRID (vectors) and FRID/FOID (features)
-    for record in &records[1..] {
+    for (record_idx, record) in records[1..].iter().enumerate() {
+        let record_num = record_idx + 1; // Adjust for 0-based indexing after skipping DDR
+
         // Process vector records
         if let Some(vrid_field) = record.fields.iter().find(|f| f.tag == "VRID") {
             if let Ok(parsed) = ddr.parse_field_data(vrid_field) {
-                let entity = NameDecodeSystem::process_vrid(&mut world, &parsed)?;
+                let entity = match NameDecodeSystem::process_vrid(&mut world, &parsed) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        // Log with record context for debugging
+                        let groups = parsed.groups();
+                        if !groups.is_empty() {
+                            let group = &groups[0];
+                            let fields: Vec<String> = group
+                                .iter()
+                                .map(|(label, val)| format!("{}={:?}", label, val))
+                                .collect();
+                            log::warn!(
+                                "Skipping VRID at record {}: {} [fields: {}]",
+                                record_num,
+                                e,
+                                fields.join(", ")
+                            );
+                        } else {
+                            log::warn!("Skipping VRID at record {}: {} [no groups]", record_num, e);
+                        }
+                        continue;
+                    }
+                };
 
                 // Process SG2D geometry if present
                 if let Some(sg2d_field) = record.fields.iter().find(|f| f.tag == "SG2D") {
@@ -129,11 +153,17 @@ pub fn build_world(file: &S57File) -> Result<World> {
             if let Some(foid_field) = record.fields.iter().find(|f| f.tag == "FOID") {
                 if let Ok(parsed_frid) = ddr.parse_field_data(frid_field) {
                     if let Ok(parsed_foid) = ddr.parse_field_data(foid_field) {
-                        let entity = FoidDecodeSystem::process_feature(
+                        let entity = match FoidDecodeSystem::process_feature(
                             &mut world,
                             &parsed_frid,
                             &parsed_foid,
-                        )?;
+                        ) {
+                            Ok(e) => e,
+                            Err(e) => {
+                                log::warn!("Skipping FRID/FOID at record {}: {}", record_num, e);
+                                continue;
+                            }
+                        };
 
                         // Process ATTF attributes if present
                         if let Some(attf_field) = record.fields.iter().find(|f| f.tag == "ATTF") {

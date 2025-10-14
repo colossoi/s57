@@ -401,11 +401,13 @@ impl DDR {
             let start_offset = offset;
 
             for (subfield_idx, subfield_def) in def.subfields.iter().enumerate() {
-                if offset >= data.len() || data[offset] == 0x1E {
+                if offset >= data.len() {
                     break;
                 }
 
                 let value = if let Some(width) = subfield_def.width {
+                    // Fixed-width field: don't check for terminators, just read exact bytes
+                    // Terminators like 0x1E can appear as valid data in binary fields
                     // Fixed width - read exact number of bytes
                     // No unit terminators between fixed-width fields
                     let end = (offset + width).min(data.len());
@@ -1006,6 +1008,103 @@ mod tests {
         }
         if let SubfieldValue::Integer(z) = ve3d0.1 {
             assert_eq!(z, 22, "group_0 VE3D");
+        }
+    }
+
+    #[test]
+    fn test_parse_vrid_with_0x1e_in_rcid() {
+        // VRID field with RCID=30 (0x1E), which looks like a field terminator
+        // Hex: 6e 1e 00 00 00 01 00 01 1e
+        // Should parse as:
+        // - RCNM (b11): 0x6e = 110
+        // - RCID (b14): 0x0000001e = 30  (little-endian 4-byte)
+        // - RVER (b12): 0x0001 = 1       (little-endian 2-byte)
+        // - RUIN (b11): 0x01 = 1         (1-byte)
+        // - 0x1e = field terminator
+        let field_data: Vec<u8> = vec![0x6e, 0x1e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x1e];
+
+        let array_descriptor = "RCNM!RCID!RVER!RUIN".to_string();
+        let format_controls = "(b11,b14,b12,b11)".to_string();
+
+        let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
+
+        // Verify subfield definitions
+        assert_eq!(subfields.len(), 4, "Should have 4 subfields");
+        assert_eq!(subfields[0].label, "RCNM");
+        assert_eq!(subfields[0].width, Some(1), "b11 should be 1 byte");
+        assert_eq!(subfields[1].label, "RCID");
+        assert_eq!(subfields[1].width, Some(4), "b14 should be 4 bytes");
+        assert_eq!(subfields[2].label, "RVER");
+        assert_eq!(subfields[2].width, Some(2), "b12 should be 2 bytes");
+        assert_eq!(subfields[3].label, "RUIN");
+        assert_eq!(subfields[3].width, Some(1), "b11 should be 1 byte");
+
+        let field_def = FieldDef {
+            tag: "VRID".to_string(),
+            name: "Vector record identifier field".to_string(),
+            array_descriptor: array_descriptor.clone(),
+            format_controls: format_controls.clone(),
+            subfields,
+            is_repeating: false,
+        };
+
+        let mut ddr = DDR {
+            field_defs: std::collections::HashMap::new(),
+            schema: OverrideSchema::new(),
+        };
+        ddr.field_defs.insert("VRID".to_string(), field_def);
+
+        let field = Field {
+            tag: "VRID".to_string(),
+            data: field_data.clone(),
+        };
+
+        let result = ddr.parse_field_data(&field);
+        assert!(
+            result.is_ok(),
+            "Failed to parse VRID field: {:?}",
+            result.err()
+        );
+
+        let parsed = result.unwrap();
+        let groups = parsed.groups();
+        assert_eq!(groups.len(), 1, "Should have 1 group");
+        let group = &groups[0];
+
+        println!("\nParsed VRID with RCID=30 (0x1E):");
+        for (label, value) in group {
+            println!("  {}: {:?}", label, value);
+        }
+
+        // Validate all fields are present and correct
+        let rcnm = group.iter().find(|(label, _)| label == "RCNM");
+        assert!(rcnm.is_some(), "RCNM not found");
+        if let Some((_, SubfieldValue::Integer(val))) = rcnm {
+            assert_eq!(*val, 110, "RCNM should be 110");
+        }
+
+        let rcid = group.iter().find(|(label, _)| label == "RCID");
+        assert!(
+            rcid.is_some(),
+            "RCID not found - parser stopped early at 0x1E byte"
+        );
+        if let Some((_, SubfieldValue::Integer(val))) = rcid {
+            assert_eq!(
+                *val, 30,
+                "RCID should be 30 (0x1E in little-endian 4-byte format)"
+            );
+        }
+
+        let rver = group.iter().find(|(label, _)| label == "RVER");
+        assert!(rver.is_some(), "RVER not found");
+        if let Some((_, SubfieldValue::Integer(val))) = rver {
+            assert_eq!(*val, 1, "RVER should be 1");
+        }
+
+        let ruin = group.iter().find(|(label, _)| label == "RUIN");
+        assert!(ruin.is_some(), "RUIN not found");
+        if let Some((_, SubfieldValue::Integer(val))) = ruin {
+            assert_eq!(*val, 1, "RUIN should be 1");
         }
     }
 }

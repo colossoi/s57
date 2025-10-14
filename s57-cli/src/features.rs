@@ -1,4 +1,4 @@
-use s57_catalogue::{Attribute, ObjectClass};
+use s57_catalogue::{AttributeInfo, ObjectClass};
 use s57_interp::ecs::EntityType;
 use s57_parse::S57File;
 
@@ -37,8 +37,8 @@ pub fn list_features(file: &S57File) {
 
             // Get object class name
             let objl_str = ObjectClass::from_code(meta.objl)
-                .map(|c| c.name())
-                .unwrap_or("Unknown");
+                .map(|c| c.name().to_string())
+                .unwrap_or_else(|| format!("Unknown ({})", meta.objl));
 
             // Get object name from attributes (OBJNAM = 116)
             let objnam = world
@@ -126,8 +126,8 @@ pub fn show_object(file: &S57File, target_rcid: u32) {
         "  Object Label: {} ({})",
         meta.objl,
         ObjectClass::from_code(meta.objl)
-            .map(|c| c.name())
-            .unwrap_or("Unknown")
+            .map(|c| c.name().to_string())
+            .unwrap_or_else(|| format!("Unknown ({})", meta.objl))
     );
     println!("  Record Version: {}", meta.rver);
     println!("  Update Instruction: {}", meta.ruin);
@@ -137,7 +137,7 @@ pub fn show_object(file: &S57File, target_rcid: u32) {
         if !attrs.attf.is_empty() {
             println!("\nAttributes (ATTF):");
             for (attl, atvl) in &attrs.attf {
-                let attr_name = Attribute::attribute_name(*attl).unwrap_or("Unknown");
+                let attr_name = AttributeInfo::attribute_name(*attl).unwrap_or("Unknown");
                 println!("  {} = \"{}\" ({})", attl, atvl, attr_name);
             }
         }
@@ -198,8 +198,8 @@ pub fn show_object(file: &S57File, target_rcid: u32) {
             for (idx, related_entity) in pointers.related_features.iter().enumerate() {
                 if let Some(rmeta) = world.feature_meta.get(related_entity) {
                     let objl_str = ObjectClass::from_code(rmeta.objl)
-                        .map(|c| c.name())
-                        .unwrap_or("Unknown");
+                        .map(|c| c.name().to_string())
+                        .unwrap_or_else(|| format!("Unknown ({})", rmeta.objl));
                     println!(
                         "  [{}] FOID {}:{}:{} - {} ({})",
                         idx,
