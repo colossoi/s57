@@ -4,7 +4,10 @@
 //! structured entities and components. Each system focuses on a specific
 //! transformation step in the pipeline.
 
-use crate::ecs::{EntityType, ExactDepths, ExactPositions, FeatureMeta, VectorMeta, World};
+use crate::ecs::{
+    EntityType, ExactDepths, ExactPositions, FeatureMeta, VectorMeta, VectorNeighbor,
+    VectorTopology, World,
+};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use s57_parse::bitstring::{FoidKey, NameKey};
@@ -386,6 +389,113 @@ impl GeometrySystem {
             .iter()
             .find(|(l, _)| l == label)
             .and_then(|(_, v)| v.as_int())
+    }
+}
+
+/// TopologySystem: Process VRPT records to build vector topology
+///
+/// Extracts vector topology relationships from VRPT (Vector Record Pointer) fields:
+/// - NAME: pointer to neighboring vector (B40 bitstring)
+/// - ORNT: orientation (1=forward, 2=reverse, 255=N/A)
+/// - USAG: usage (1=exterior, 2=interior, 3=exterior truncated)
+/// - TOPI: topology indicator (1=begin node, 2=end node, 3=left face, 4=right face, etc.)
+/// - MASK: masking (1=mask, 2=show, 255=N/A)
+///
+/// Creates VectorTopology component with list of VectorNeighbor relationships.
+///
+/// Input: ParsedField from VRPT
+/// Output: VectorTopology component
+pub struct TopologySystem;
+
+impl TopologySystem {
+    /// Process VRPT field to extract topology relationships
+    ///
+    /// # Arguments
+    /// * `world` - ECS world to update
+    /// * `entity` - Entity to attach topology to
+    /// * `vrpt` - Parsed VRPT field
+    ///
+    /// # Returns
+    /// Ok(()) if successful, or ParseError if data missing
+    pub fn process_vrpt(
+        world: &mut World,
+        entity: crate::ecs::EntityId,
+        vrpt: &ParsedField,
+    ) -> Result<()> {
+        let groups = vrpt.groups();
+        if groups.is_empty() {
+            return Err(ParseError::at(
+                ParseErrorKind::InvalidField("VRPT has no data".to_string()),
+                0,
+            ));
+        }
+
+        // Extract topology relationships from repeating groups
+        let mut neighbors = Vec::with_capacity(groups.len());
+
+        for group in groups {
+            // Extract NAME (B40 bitstring - 5 bytes)
+            let name_bytes = Self::get_bytes(group, "NAME").ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField("VRPT missing NAME".to_string()),
+                    0,
+                )
+            })?;
+
+            // Decode NAME bitstring to NameKey
+            let name = NameKey::decode(name_bytes).map_err(|e| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField(format!("Failed to decode NAME: {}", e)),
+                    0,
+                )
+            })?;
+
+            // Extract orientation (optional, default 255=N/A)
+            let ornt = Self::get_int(group, "ORNT").unwrap_or(255) as u8;
+
+            // Extract usage (optional, default 255=N/A)
+            let usag = Self::get_int(group, "USAG").unwrap_or(255) as u8;
+
+            // Extract topology indicator (optional, default 255=N/A)
+            let topi = Self::get_int(group, "TOPI").unwrap_or(255) as u8;
+
+            // Extract masking (optional, default 255=N/A)
+            let mask = Self::get_int(group, "MASK").unwrap_or(255) as u8;
+
+            neighbors.push(VectorNeighbor {
+                name,
+                ornt,
+                usag,
+                topi,
+                mask,
+            });
+        }
+
+        // Create VectorTopology component
+        world
+            .vector_topology
+            .insert(entity, VectorTopology { neighbors });
+
+        Ok(())
+    }
+
+    /// Helper: extract integer value from subfield group
+    fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
+        group
+            .iter()
+            .find(|(l, _)| l == label)
+            .and_then(|(_, v)| v.as_int())
+    }
+
+    /// Helper: extract bytes value from subfield group
+    fn get_bytes<'a>(group: &'a [(String, SubfieldValue)], label: &str) -> Option<&'a [u8]> {
+        group.iter().find(|(l, _)| l == label).and_then(|(_, v)| {
+            if let SubfieldValue::Bytes(bytes) = v {
+                Some(bytes.as_slice())
+            } else {
+                None
+            }
+        })
     }
 }
 
