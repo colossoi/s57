@@ -16,7 +16,7 @@ use s57_parse::{ParseError, ParseErrorKind, Result};
 
 /// Helper: Extract u8 from subfield group
 /// Returns Ok(None) if field not present, Err if present but wrong type or out of range
-fn get_u8(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u8>> {
+pub(crate) fn get_u8(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u8>> {
     match group.iter().find(|(l, _)| l == label) {
         None => Ok(None),
         Some((_, SubfieldValue::Integer(i))) if *i >= 0 && *i <= u8::MAX as i32 => {
@@ -35,7 +35,7 @@ fn get_u8(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u8>> 
 
 /// Helper: Extract u16 from subfield group
 /// Returns Ok(None) if field not present, Err if present but wrong type or out of range
-fn get_u16(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u16>> {
+pub(crate) fn get_u16(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u16>> {
     match group.iter().find(|(l, _)| l == label) {
         None => Ok(None),
         Some((_, SubfieldValue::Integer(i))) if *i >= 0 && *i <= u16::MAX as i32 => {
@@ -56,7 +56,7 @@ fn get_u16(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u16>
 
 /// Helper: Extract u32 from subfield group
 /// Returns Ok(None) if field not present, Err if present but wrong type or negative
-fn get_u32(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u32>> {
+pub(crate) fn get_u32(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u32>> {
     match group.iter().find(|(l, _)| l == label) {
         None => Ok(None),
         Some((_, SubfieldValue::Integer(i))) if *i >= 0 => Ok(Some(*i as u32)),
@@ -73,7 +73,7 @@ fn get_u32(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u32>
 
 /// Helper: Extract i32 from subfield group
 /// Returns Ok(None) if field not present, Err if present but wrong type
-fn get_i32(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<i32>> {
+pub(crate) fn get_i32(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<i32>> {
     match group.iter().find(|(l, _)| l == label) {
         None => Ok(None),
         Some((_, SubfieldValue::Integer(i))) => Ok(Some(*i)),

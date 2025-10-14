@@ -23,7 +23,8 @@ use num_bigint::BigInt;
 use s57_parse::ddr::{SubfieldValue, DDR};
 use s57_parse::S57File;
 use systems::{
-    FeatureBindSystem, FoidDecodeSystem, GeometrySystem, NameDecodeSystem, TopologySystem,
+    get_i32, get_u16, get_u32, FeatureBindSystem, FoidDecodeSystem, GeometrySystem,
+    NameDecodeSystem, TopologySystem,
 };
 
 /// Build a World from an S57File
@@ -67,15 +68,15 @@ pub fn build_world(file: &S57File) -> Result<World> {
         if let Some(dspm_field) = record.fields.iter().find(|f| f.tag == "DSPM") {
             if let Ok(parsed) = ddr.parse_field_data(dspm_field) {
                 if let Some(group) = parsed.groups().first() {
-                    let comf = get_int(group, "COMF").unwrap_or(10_000_000);
-                    let somf = get_int(group, "SOMF").unwrap_or(100);
-                    let duni = get_int(group, "DUNI").unwrap_or(1) as u16;
-                    let huni = get_int(group, "HUNI").unwrap_or(1) as u16;
-                    let puni = get_int(group, "PUNI").unwrap_or(1) as u16;
-                    let hdat = get_int(group, "HDAT").unwrap_or(2) as u16;
-                    let vdat = get_int(group, "VDAT").unwrap_or(0) as u16;
-                    let sdat = get_int(group, "SDAT").unwrap_or(0) as u16;
-                    let cscl = get_int(group, "CSCL").unwrap_or(1) as u32;
+                    let comf = get_i32(group, "COMF").ok().flatten().unwrap_or(10_000_000);
+                    let somf = get_i32(group, "SOMF").ok().flatten().unwrap_or(100);
+                    let duni = get_u16(group, "DUNI").ok().flatten().unwrap_or(1);
+                    let huni = get_u16(group, "HUNI").ok().flatten().unwrap_or(1);
+                    let puni = get_u16(group, "PUNI").ok().flatten().unwrap_or(1);
+                    let hdat = get_u16(group, "HDAT").ok().flatten().unwrap_or(2);
+                    let vdat = get_u16(group, "VDAT").ok().flatten().unwrap_or(0);
+                    let sdat = get_u16(group, "SDAT").ok().flatten().unwrap_or(0);
+                    let cscl = get_u32(group, "CSCL").ok().flatten().unwrap_or(1);
 
                     world.dataset_params = Some(DatasetParams {
                         comf: BigInt::from(comf),
@@ -170,7 +171,7 @@ pub fn build_world(file: &S57File) -> Result<World> {
                             if let Ok(parsed_attf) = ddr.parse_field_data(attf_field) {
                                 let mut attf = Vec::new();
                                 for group in parsed_attf.groups() {
-                                    let attl = get_int(group, "ATTL").unwrap_or(0) as u16;
+                                    let attl = get_u16(group, "ATTL").ok().flatten().unwrap_or(0);
                                     let atvl = get_string(group, "ATVL").unwrap_or_default();
                                     attf.push((attl, atvl));
                                 }
@@ -187,7 +188,7 @@ pub fn build_world(file: &S57File) -> Result<World> {
                             if let Ok(parsed_natf) = ddr.parse_field_data(natf_field) {
                                 let mut natf = Vec::new();
                                 for group in parsed_natf.groups() {
-                                    let attl = get_int(group, "ATTL").unwrap_or(0) as u16;
+                                    let attl = get_u16(group, "ATTL").ok().flatten().unwrap_or(0);
                                     let atvl = get_string(group, "ATVL").unwrap_or_default();
                                     natf.push((attl, atvl));
                                 }
@@ -202,11 +203,17 @@ pub fn build_world(file: &S57File) -> Result<World> {
                         // Process FSPT spatial pointers if present
                         if let Some(fspt_field) = record.fields.iter().find(|f| f.tag == "FSPT") {
                             if let Ok(parsed_fspt) = ddr.parse_field_data(fspt_field) {
-                                let _ = FeatureBindSystem::process_fspt(
+                                if let Err(e) = FeatureBindSystem::process_fspt(
                                     &mut world,
                                     entity,
                                     &parsed_fspt,
-                                );
+                                ) {
+                                    log::warn!(
+                                        "Failed to process FSPT at record {}: {}",
+                                        record_num,
+                                        e
+                                    );
+                                }
                             }
                         }
 
@@ -227,14 +234,6 @@ pub fn build_world(file: &S57File) -> Result<World> {
     }
 
     Ok(world)
-}
-
-/// Helper: extract integer value from subfield group
-fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
-    group
-        .iter()
-        .find(|(l, _)| l == label)
-        .and_then(|(_, v)| v.as_int())
 }
 
 /// Helper: extract string value from subfield group

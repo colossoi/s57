@@ -357,15 +357,30 @@ impl DDR {
                 // Terminated by UT (0x1F) or FT (0x1E)
                 None
             }
-            FormatType::AsciiFixed
-            | FormatType::IntegerAsciiFixed
-            | FormatType::RealBinary
-            | FormatType::BitString => {
-                // Fixed-length formats: A(n), I(n), R(n), B(n)
-                // Extract n from parentheses
+            FormatType::AsciiFixed | FormatType::IntegerAsciiFixed | FormatType::RealBinary => {
+                // Fixed-length formats: A(n), I(n), R(n)
+                // Extract n from parentheses (n = bytes)
                 if width_str.starts_with('(') {
                     if let Some(end) = width_str.find(')') {
                         width_str[1..end].parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            FormatType::BitString => {
+                // Bit string: B(n) where n = number of BITS, not bytes
+                // Convert bits to bytes: n / 8
+                // Example: B(40) = 40 bits = 5 bytes
+                if width_str.starts_with('(') {
+                    if let Some(end) = width_str.find(')') {
+                        if let Ok(bits) = width_str[1..end].parse::<usize>() {
+                            Some(bits / 8)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -1232,6 +1247,102 @@ mod tests {
         assert!(ruin.is_some(), "RUIN not found");
         if let Some((_, SubfieldValue::Integer(val))) = ruin {
             assert_eq!(*val, 1, "RUIN should be 1");
+        }
+    }
+
+    #[test]
+    fn test_parse_fspt_with_b40_bitstring() {
+        // FSPT field with NAME as B(40) bitstring (40 bits = 5 bytes)
+        // Format: (*NAME!ORNT!USAG!MASK) with format (B(40),3b11)
+        // This is a repeating field - each group is 5 + 3 = 8 bytes
+        // Mock data: one group with NAME=5 bytes, ORNT=1, USAG=1, MASK=255
+        let field_data: Vec<u8> = vec![
+            // Group 1: NAME (5 bytes B40) + ORNT (1 byte) + USAG (1 byte) + MASK (1 byte)
+            0x82, 0x67, 0x02, 0x00, 0x00, // NAME: B(40) bitstring = 5 bytes
+            0x01, // ORNT: 1
+            0x01, // USAG: 1
+            0xff, // MASK: 255
+            0x1e, // Field terminator
+        ];
+
+        let array_descriptor = "*NAME!ORNT!USAG!MASK".to_string();
+        let format_controls = "(B(40),3b11)".to_string();
+
+        let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
+
+        // Verify subfield definitions
+        assert_eq!(subfields.len(), 4, "Should have 4 subfields");
+        assert_eq!(subfields[0].label, "NAME");
+        assert_eq!(subfields[0].format, FormatType::BitString);
+        assert_eq!(
+            subfields[0].width,
+            Some(5),
+            "B(40) should be 5 bytes (40 bits / 8)"
+        );
+        assert_eq!(subfields[1].label, "ORNT");
+        assert_eq!(subfields[1].width, Some(1), "b11 should be 1 byte");
+        assert_eq!(subfields[2].label, "USAG");
+        assert_eq!(subfields[2].width, Some(1), "b11 should be 1 byte");
+        assert_eq!(subfields[3].label, "MASK");
+        assert_eq!(subfields[3].width, Some(1), "b11 should be 1 byte");
+
+        let field_def = FieldDef {
+            tag: "FSPT".to_string(),
+            name: "Feature to spatial record pointer field".to_string(),
+            array_descriptor: array_descriptor.clone(),
+            format_controls: format_controls.clone(),
+            subfields,
+            is_repeating: true,
+        };
+
+        let mut ddr = DDR {
+            field_defs: std::collections::HashMap::new(),
+            schema: OverrideSchema::new(),
+        };
+        ddr.field_defs.insert("FSPT".to_string(), field_def);
+
+        let field = Field {
+            tag: "FSPT".to_string(),
+            data: field_data.clone(),
+        };
+
+        let result = ddr.parse_field_data(&field);
+        assert!(
+            result.is_ok(),
+            "Failed to parse FSPT field: {:?}",
+            result.err()
+        );
+
+        let parsed = result.unwrap();
+        let groups = parsed.groups();
+        assert_eq!(groups.len(), 1, "Should have 1 group");
+        let group = &groups[0];
+
+        println!("\nParsed FSPT with B(40) bitstring:");
+        for (label, value) in group {
+            println!("  {}: {:?}", label, value);
+        }
+
+        // Validate NAME is exactly 5 bytes
+        let name = group.iter().find(|(label, _)| label == "NAME");
+        assert!(name.is_some(), "NAME not found");
+        if let Some((_, SubfieldValue::Bytes(bytes))) = name {
+            assert_eq!(
+                bytes.len(),
+                5,
+                "NAME should be exactly 5 bytes, got {}",
+                bytes.len()
+            );
+            assert_eq!(&bytes[..], &[0x82, 0x67, 0x02, 0x00, 0x00]);
+        } else {
+            panic!("NAME should be Bytes variant");
+        }
+
+        // Validate other fields
+        let ornt = group.iter().find(|(label, _)| label == "ORNT");
+        assert!(ornt.is_some(), "ORNT not found");
+        if let Some((_, SubfieldValue::Integer(val))) = ornt {
+            assert_eq!(*val, 1, "ORNT should be 1");
         }
     }
 }
