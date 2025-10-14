@@ -172,16 +172,17 @@ pub fn show_object(file: &S57File, target_rcid: u32) {
                     );
 
                     // Try to resolve coordinates via TTS (handles both direct and topology-derived)
-                    use s57_interp::topology::{EdgeWalker, TraversalContext};
+                    use s57_interp::topology::{ContinuityPolicy, EdgeWalker, TraversalContext};
 
-                    let ctx = TraversalContext::new(&world);
+                    let ctx = TraversalContext::new(&world)
+                        .with_continuity_policy(ContinuityPolicy::InsertGapMarker);
                     let mut walker = EdgeWalker::new(&ctx);
 
                     match walker.resolve_line_2d(vmeta.name) {
                         Ok(coords) => {
                             if !coords.is_empty() {
                                 println!("       {} coordinate points", coords.len());
-                                if coords.len() <= 5 {
+                                if coords.len() <= 500 {
                                     for (lat, lon) in &coords {
                                         // Convert BigRational to f64 for display
                                         let lat_f64 = lat.to_f64().unwrap_or(0.0);
