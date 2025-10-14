@@ -450,6 +450,17 @@ impl TopologySystem {
                 )
             })?;
 
+            // Resolve NAME to EntityId via name_index
+            let neighbor_entity = *world.name_index.get(&name).ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField(format!(
+                        "Referenced vector NAME not found: rcnm={}, rcid={}",
+                        name.rcnm, name.rcid
+                    )),
+                    0,
+                )
+            })?;
+
             // Extract orientation (optional, default 255=N/A)
             let ornt = Self::get_int(group, "ORNT").unwrap_or(255) as u8;
 
@@ -463,7 +474,7 @@ impl TopologySystem {
             let mask = Self::get_int(group, "MASK").unwrap_or(255) as u8;
 
             neighbors.push(VectorNeighbor {
-                name,
+                entity: neighbor_entity,
                 ornt,
                 usag,
                 topi,

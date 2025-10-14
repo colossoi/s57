@@ -154,17 +154,18 @@ pub struct VectorMeta {
 /// VectorTopology: Vector relationships from VRPT field
 ///
 /// Defines how vectors connect to form edges, faces, etc.
+/// All references are EntityIds for fast ECS lookups.
 #[derive(Debug, Clone)]
 pub struct VectorTopology {
-    /// Neighboring vector NAMEs with topology flags
+    /// Neighboring vector entities with topology flags
     pub neighbors: Vec<VectorNeighbor>,
 }
 
 /// VectorNeighbor: Single neighbor relationship from VRPT
 #[derive(Debug, Clone, Copy)]
 pub struct VectorNeighbor {
-    /// NAME of neighboring vector
-    pub name: NameKey,
+    /// EntityId of neighboring vector (resolved from NAME via name_index)
+    pub entity: EntityId,
     /// Orientation (1=forward, 2=reverse, 255=not relevant)
     pub ornt: u8,
     /// Usage indicator (1=exterior, 2=interior, 3=exterior boundary truncated)
@@ -206,19 +207,20 @@ pub struct FeatureAttributes {
 /// FeaturePointers: Cross-references from FFPT/FSPT fields
 ///
 /// Links features to other features (FFPT) and to spatial vectors (FSPT).
+/// All references are EntityIds for fast ECS lookups.
 #[derive(Debug, Clone, Default)]
 pub struct FeaturePointers {
-    /// Feature-to-feature pointers (FFPT): related features by LNAM
-    pub related_features: Vec<FoidKey>,
-    /// Feature-to-spatial pointers (FSPT): spatial vectors by NAME with flags
+    /// Feature-to-feature pointers (FFPT): related feature entities (resolved from LNAM)
+    pub related_features: Vec<EntityId>,
+    /// Feature-to-spatial pointers (FSPT): spatial vector entities with flags
     pub spatial_refs: Vec<SpatialRef>,
 }
 
 /// SpatialRef: Single spatial reference from FSPT
 #[derive(Debug, Clone, Copy)]
 pub struct SpatialRef {
-    /// NAME of referenced vector
-    pub name: NameKey,
+    /// EntityId of referenced vector (resolved from NAME via name_index)
+    pub entity: EntityId,
     /// Orientation (1=forward, 2=reverse, 255=not relevant)
     pub ornt: u8,
     /// Usage indicator
