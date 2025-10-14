@@ -222,6 +222,126 @@ impl FoidDecodeSystem {
     }
 }
 
+/// GeometrySystem: Process SG2D/SG3D records to extract coordinate arrays
+///
+/// Transforms already-parsed spatial geometry fields into ECS components:
+/// - SG2D: 2D coordinates (Y, X) in coordinate units → Geometry2D
+/// - SG3D: 3D coordinates (Y, X, Z) with sounding depth → Geometry3D
+///
+/// Input: ParsedField from s57-parse (already validated and parsed)
+/// Output: Geometry2D or Geometry3D component with Vec<(i32, i32)> or Vec<(i32, i32, i32)>
+pub struct GeometrySystem;
+
+impl GeometrySystem {
+    /// Process SG2D field to extract 2D coordinates
+    ///
+    /// # Arguments
+    /// * `world` - ECS world to update
+    /// * `entity` - Entity to attach geometry to
+    /// * `sg2d` - Parsed SG2D field
+    ///
+    /// # Returns
+    /// Ok(()) if successful, or ParseError if validation fails
+    pub fn process_sg2d(
+        world: &mut World,
+        entity: crate::ecs::EntityId,
+        sg2d: &ParsedField,
+    ) -> Result<()> {
+        let groups = sg2d.groups();
+        if groups.is_empty() {
+            return Err(ParseError::at(
+                ParseErrorKind::InvalidField("SG2D has no data".to_string()),
+                0,
+            ));
+        }
+
+        // Extract coordinate pairs from groups
+        let mut coords_yx = Vec::with_capacity(groups.len());
+        for group in groups {
+            let ycoo = Self::get_int(group, "YCOO").ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField("SG2D missing YCOO".to_string()),
+                    0,
+                )
+            })?;
+            let xcoo = Self::get_int(group, "XCOO").ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField("SG2D missing XCOO".to_string()),
+                    0,
+                )
+            })?;
+            coords_yx.push((ycoo, xcoo));
+        }
+
+        // Create Geometry2D component
+        let geom = crate::ecs::Geometry2D { coords_yx };
+        world.geometry_2d.insert(entity, geom);
+
+        Ok(())
+    }
+
+    /// Process SG3D field to extract 3D coordinates
+    ///
+    /// # Arguments
+    /// * `world` - ECS world to update
+    /// * `entity` - Entity to attach geometry to
+    /// * `sg3d` - Parsed SG3D field
+    ///
+    /// # Returns
+    /// Ok(()) if successful, or ParseError if validation fails
+    pub fn process_sg3d(
+        world: &mut World,
+        entity: crate::ecs::EntityId,
+        sg3d: &ParsedField,
+    ) -> Result<()> {
+        let groups = sg3d.groups();
+        if groups.is_empty() {
+            return Err(ParseError::at(
+                ParseErrorKind::InvalidField("SG3D has no data".to_string()),
+                0,
+            ));
+        }
+
+        // Extract coordinate triplets from groups
+        let mut coords_yxz = Vec::with_capacity(groups.len());
+        for group in groups {
+            let ycoo = Self::get_int(group, "YCOO").ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField("SG3D missing YCOO".to_string()),
+                    0,
+                )
+            })?;
+            let xcoo = Self::get_int(group, "XCOO").ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField("SG3D missing XCOO".to_string()),
+                    0,
+                )
+            })?;
+            let ve3d = Self::get_int(group, "VE3D").ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField("SG3D missing VE3D".to_string()),
+                    0,
+                )
+            })?;
+            coords_yxz.push((ycoo, xcoo, ve3d));
+        }
+
+        // Create Geometry3D component
+        let geom = crate::ecs::Geometry3D { coords_yxz };
+        world.geometry_3d.insert(entity, geom);
+
+        Ok(())
+    }
+
+    /// Helper: extract integer value from subfield group
+    fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
+        group
+            .iter()
+            .find(|(l, _)| l == label)
+            .and_then(|(_, v)| v.as_int())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,8 +385,8 @@ mod tests {
 
     // Helper to create mock ParsedField for testing
     fn create_mock_parsed_field(
-        tag: &str,
-        groups: Vec<Vec<(String, SubfieldValue)>>,
+        _tag: &str,
+        _groups: Vec<Vec<(String, SubfieldValue)>>,
     ) -> ParsedField<'static> {
         // This is a simplified mock - in real code ParsedField has lifetime tied to FieldDef
         // For testing purposes, we'll use unsafe to extend the lifetime
