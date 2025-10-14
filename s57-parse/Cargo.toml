@@ -1,0 +1,8 @@
+[package]
+name = "s57-parse"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = { workspace = true }
+thiserror = "2.0.17"

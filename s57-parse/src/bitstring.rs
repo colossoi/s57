@@ -30,7 +30,7 @@ impl NameKey {
     ///
     /// # Examples
     /// ```
-    /// # use s57::bitstring::NameKey;
+    /// # use s57_parse::bitstring::NameKey;
     /// // NAME for vector record: RCNM=110 (VI), RCID=42
     /// let data = [110, 42, 0, 0, 0];
     /// let name = NameKey::decode(&data).unwrap();
@@ -98,7 +98,7 @@ impl FoidKey {
     ///
     /// # Examples
     /// ```
-    /// # use s57::bitstring::FoidKey;
+    /// # use s57_parse::bitstring::FoidKey;
     /// // LNAM: AGEN=550 (NOAA), FIDN=12345, FIDS=1
     /// let data = [0x26, 0x02, 0x39, 0x30, 0x00, 0x00, 0x01, 0x00];
     /// let foid = FoidKey::decode(&data).unwrap();

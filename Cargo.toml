@@ -1,5 +1,5 @@
 [workspace]
-members = ["s57", "s57-cli"]
+members = ["s57-parse", "s57-cli", "s57-interp"]
 resolver = "2"
 
 [workspace.dependencies]

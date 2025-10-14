@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use s57::S57File;
+use s57_parse::S57File;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -104,7 +104,7 @@ fn print_info(path: &PathBuf, file_size: usize, file: &S57File) {
     // Parse DDR if available
     if let Some(ddr_record) = records.first() {
         if ddr_record.leader.is_ddr() {
-            match s57::ddr::DDR::parse(ddr_record) {
+            match s57_parse::ddr::DDR::parse(ddr_record) {
                 Ok(ddr) => {
                     println!("\nData Descriptive Record (DDR):");
                     println!("  Field definitions: {}", ddr.field_defs().len());
@@ -176,7 +176,7 @@ fn print_yaml(file: &S57File, record_filter: Option<usize>, limit: usize) {
 
     // Parse DDR first
     if let Some(ddr_record) = records.first() {
-        match s57::ddr::DDR::parse(ddr_record) {
+        match s57_parse::ddr::DDR::parse(ddr_record) {
             Ok(ddr) => {
                 print_yaml_structure_with_ddr(&records_to_print, record_filter, limit, &ddr);
             }
@@ -262,12 +262,12 @@ fn print_hex(file: &S57File, record_filter: Option<usize>) {
 }
 
 fn print_yaml_structure_with_ddr(
-    records: &[&s57::iso8211::Record],
+    records: &[&s57_parse::iso8211::Record],
     record_filter: Option<usize>,
     limit: usize,
-    ddr: &s57::ddr::DDR,
+    ddr: &s57_parse::ddr::DDR,
 ) {
-    use s57::interpret::*;
+    use s57_parse::interpret::*;
 
     // Only show field definitions if not filtering to a specific record
     if record_filter.is_none() {
@@ -421,10 +421,10 @@ fn print_yaml_structure_with_ddr(
                                     "            "
                                 };
                                 match value {
-                                    s57::ddr::SubfieldValue::Null => {
+                                    s57_parse::ddr::SubfieldValue::Null => {
                                         println!("{}{}: null", indent, label);
                                     }
-                                    s57::ddr::SubfieldValue::Integer(i) => {
+                                    s57_parse::ddr::SubfieldValue::Integer(i) => {
                                         let comment = match label.as_str() {
                                             "RCNM" => {
                                                 format!("  # {}", interpret_record_name(*i as u8))
@@ -446,13 +446,13 @@ fn print_yaml_structure_with_ddr(
                                         };
                                         println!("{}{}: {}{}", indent, label, i, comment);
                                     }
-                                    s57::ddr::SubfieldValue::Real(f) => {
+                                    s57_parse::ddr::SubfieldValue::Real(f) => {
                                         println!("{}{}: {:.6}", indent, label, f);
                                     }
-                                    s57::ddr::SubfieldValue::String(s) => {
+                                    s57_parse::ddr::SubfieldValue::String(s) => {
                                         println!("{}{}: \"{}\"", indent, label, s);
                                     }
-                                    s57::ddr::SubfieldValue::Bytes(b) => {
+                                    s57_parse::ddr::SubfieldValue::Bytes(b) => {
                                         let hex: String = b
                                             .iter()
                                             .take(8)
@@ -486,11 +486,11 @@ fn print_yaml_structure_with_ddr(
 }
 
 fn print_yaml_structure(
-    records: &[&s57::iso8211::Record],
+    records: &[&s57_parse::iso8211::Record],
     record_filter: Option<usize>,
     limit: usize,
 ) {
-    use s57::interpret::*;
+    use s57_parse::interpret::*;
 
     println!("records:");
     let records_to_show = if record_filter.is_some() {
@@ -552,7 +552,7 @@ fn print_yaml_structure(
 }
 
 fn print_field_interpretation(tag: &str, data: &[u8]) {
-    use s57::interpret::*;
+    use s57_parse::interpret::*;
 
     match tag {
         "0001" => {

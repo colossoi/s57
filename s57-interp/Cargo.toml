@@ -1,19 +1,16 @@
 [package]
-name = "s57"
+name = "s57-interp"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-log = { workspace = true }
-thiserror = "2.0.17"
+# Parser crate for ISO 8211 / S-57
+s57-parse = { path = "../s57-parse" }
 
 # Exact math for coordinates and depths
 num-bigint = "0.4"
 num-rational = "0.4"
 num-traits = "0.2"
-
-# Optional: BCD/decimal alternative (comment out if using only BigRational)
-# rust_decimal = "1.36"
 
 # ECS entity management
 slotmap = "1.0"
