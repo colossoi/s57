@@ -11,6 +11,7 @@
 
 use num_bigint::BigInt;
 use num_rational::BigRational;
+use num_traits::ToPrimitive;
 use s57_parse::bitstring::{FoidKey, NameKey};
 use slotmap::{new_key_type, SlotMap};
 use std::collections::HashMap;
@@ -48,8 +49,6 @@ pub struct World {
     pub feature_pointers: HashMap<EntityId, FeaturePointers>,
     pub exact_positions: HashMap<EntityId, ExactPositions>,
     pub exact_depths: HashMap<EntityId, ExactDepths>,
-    pub positions_f64: HashMap<EntityId, PositionsF64>,
-    pub depths_f64: HashMap<EntityId, DepthsF64>,
 }
 
 /// EntityMeta: Minimal metadata stored in slotmap
@@ -89,8 +88,6 @@ impl World {
         self.feature_pointers.remove(&entity);
         self.exact_positions.remove(&entity);
         self.exact_depths.remove(&entity);
-        self.positions_f64.remove(&entity);
-        self.depths_f64.remove(&entity);
     }
 
     /// Check if an entity exists (not deleted)
@@ -232,8 +229,10 @@ pub struct SpatialRef {
 
 /// ExactPositions: Exact lat/lon coordinates (BigRational)
 ///
-/// Computed from Geometry2D/3D by dividing by COMF:
+/// Computed from SG2D/SG3D fields by dividing by COMF:
 /// lat = y / COMF (degrees), lon = x / COMF (degrees)
+///
+/// All processing should use exact math. Convert to f64 only at render time.
 #[derive(Debug, Clone)]
 pub struct ExactPositions {
     /// Latitude in degrees (exact rational)
@@ -242,10 +241,23 @@ pub struct ExactPositions {
     pub lon: Vec<BigRational>,
 }
 
+impl ExactPositions {
+    /// Convert to f64 for rendering (on-demand, not cached)
+    ///
+    /// Returns (lat, lon) vectors as f64. Use only at final rendering boundary.
+    pub fn to_f64(&self) -> (Vec<f64>, Vec<f64>) {
+        let lat_f64 = self.lat.iter().map(|r| r.to_f64().unwrap_or(0.0)).collect();
+        let lon_f64 = self.lon.iter().map(|r| r.to_f64().unwrap_or(0.0)).collect();
+        (lat_f64, lon_f64)
+    }
+}
+
 /// ExactDepths: Exact depth values (BigRational)
 ///
-/// Computed from Geometry3D by dividing by SOMF:
+/// Computed from SG3D fields by dividing by SOMF:
 /// depth = z / SOMF (in DUNI units, typically metres)
+///
+/// All processing should use exact math. Convert to f64 only at render time.
 #[derive(Debug, Clone)]
 pub struct ExactDepths {
     /// Depth values (exact rational, positive down)
@@ -254,25 +266,17 @@ pub struct ExactDepths {
     pub units: u16,
 }
 
-/// PositionsF64: Float view of positions for rendering
-///
-/// Lazy materialization from ExactPositions → f64.
-/// May include projection (e.g., WGS84 → WebMercator).
-#[derive(Debug, Clone)]
-pub struct PositionsF64 {
-    /// Latitude in degrees (or projected Y)
-    pub lat: Vec<f64>,
-    /// Longitude in degrees (or projected X)
-    pub lon: Vec<f64>,
-}
-
-/// DepthsF64: Float view of depths for rendering
-///
-/// Lazy materialization from ExactDepths → f64.
-#[derive(Debug, Clone)]
-pub struct DepthsF64 {
-    /// Depth values in metres (converted if necessary)
-    pub depth: Vec<f64>,
+impl ExactDepths {
+    /// Convert to f64 for rendering (on-demand, not cached)
+    ///
+    /// Returns depths as f64. Use only at final rendering boundary.
+    /// TODO: Add unit conversion if units != 1 (metres)
+    pub fn to_f64(&self) -> Vec<f64> {
+        self.depth
+            .iter()
+            .map(|r| r.to_f64().unwrap_or(0.0))
+            .collect()
+    }
 }
 
 #[cfg(test)]
