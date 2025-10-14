@@ -5,8 +5,8 @@
 //! transformation step in the pipeline.
 
 use crate::ecs::{
-    EntityType, ExactDepths, ExactPositions, FeatureMeta, VectorMeta, VectorNeighbor,
-    VectorTopology, World,
+    EntityType, ExactDepths, ExactPositions, FeatureMeta, FeaturePointers, SpatialRef, VectorMeta,
+    VectorNeighbor, VectorTopology, World,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -486,6 +486,185 @@ impl TopologySystem {
         world
             .vector_topology
             .insert(entity, VectorTopology { neighbors });
+
+        Ok(())
+    }
+
+    /// Helper: extract integer value from subfield group
+    fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
+        group
+            .iter()
+            .find(|(l, _)| l == label)
+            .and_then(|(_, v)| v.as_int())
+    }
+
+    /// Helper: extract bytes value from subfield group
+    fn get_bytes<'a>(group: &'a [(String, SubfieldValue)], label: &str) -> Option<&'a [u8]> {
+        group.iter().find(|(l, _)| l == label).and_then(|(_, v)| {
+            if let SubfieldValue::Bytes(bytes) = v {
+                Some(bytes.as_slice())
+            } else {
+                None
+            }
+        })
+    }
+}
+
+/// FeatureBindSystem: Process FSPT/FFPT records to link features to vectors/features
+///
+/// Extracts feature relationship pointers:
+/// - FSPT (Feature-to-Spatial): Links features to vector entities (geometry)
+///   - NAME: pointer to vector (B40 bitstring)
+///   - ORNT: orientation (1=forward, 2=reverse, 255=N/A)
+///   - USAG: usage indicator
+///   - MASK: masking indicator
+/// - FFPT (Feature-to-Feature): Links features to other features
+///   - LNAM: pointer to feature (B64 bitstring)
+///   - RIND: relationship indicator
+///
+/// Creates/updates FeaturePointers component with EntityId references.
+///
+/// Input: ParsedField from FSPT or FFPT
+/// Output: FeaturePointers component
+pub struct FeatureBindSystem;
+
+impl FeatureBindSystem {
+    /// Process FSPT field to extract feature-to-spatial pointers
+    ///
+    /// # Arguments
+    /// * `world` - ECS world with indices
+    /// * `entity` - Feature entity to update
+    /// * `fspt` - Parsed FSPT field
+    ///
+    /// # Returns
+    /// Ok(()) if successful, or ParseError if data missing
+    pub fn process_fspt(
+        world: &mut World,
+        entity: crate::ecs::EntityId,
+        fspt: &ParsedField,
+    ) -> Result<()> {
+        let groups = fspt.groups();
+        if groups.is_empty() {
+            // FSPT can be empty (feature with no spatial)
+            return Ok(());
+        }
+
+        // Extract spatial references from repeating groups
+        let mut spatial_refs = Vec::with_capacity(groups.len());
+
+        for group in groups {
+            // Extract NAME (B40 bitstring - 5 bytes)
+            let name_bytes = Self::get_bytes(group, "NAME").ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField("FSPT missing NAME".to_string()),
+                    0,
+                )
+            })?;
+
+            // Decode NAME bitstring to NameKey
+            let name = NameKey::decode(name_bytes).map_err(|e| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField(format!("Failed to decode NAME: {}", e)),
+                    0,
+                )
+            })?;
+
+            // Resolve NAME to EntityId via name_index
+            let vector_entity = *world.name_index.get(&name).ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField(format!(
+                        "Referenced vector NAME not found: rcnm={}, rcid={}",
+                        name.rcnm, name.rcid
+                    )),
+                    0,
+                )
+            })?;
+
+            // Extract flags (optional, default 255=N/A)
+            let ornt = Self::get_int(group, "ORNT").unwrap_or(255) as u8;
+            let usag = Self::get_int(group, "USAG").unwrap_or(255) as u8;
+            let mask = Self::get_int(group, "MASK").unwrap_or(255) as u8;
+
+            spatial_refs.push(SpatialRef {
+                entity: vector_entity,
+                ornt,
+                usag,
+                mask,
+            });
+        }
+
+        // Get or create FeaturePointers component
+        let pointers = world
+            .feature_pointers
+            .entry(entity)
+            .or_insert_with(FeaturePointers::default);
+
+        pointers.spatial_refs = spatial_refs;
+
+        Ok(())
+    }
+
+    /// Process FFPT field to extract feature-to-feature pointers
+    ///
+    /// # Arguments
+    /// * `world` - ECS world with indices
+    /// * `entity` - Feature entity to update
+    /// * `ffpt` - Parsed FFPT field
+    ///
+    /// # Returns
+    /// Ok(()) if successful, or ParseError if data missing
+    pub fn process_ffpt(
+        world: &mut World,
+        entity: crate::ecs::EntityId,
+        ffpt: &ParsedField,
+    ) -> Result<()> {
+        let groups = ffpt.groups();
+        if groups.is_empty() {
+            // FFPT can be empty (no related features)
+            return Ok(());
+        }
+
+        // Extract feature references from repeating groups
+        let mut related_features = Vec::with_capacity(groups.len());
+
+        for group in groups {
+            // Extract LNAM (B64 bitstring - 8 bytes)
+            let lnam_bytes = Self::get_bytes(group, "LNAM").ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField("FFPT missing LNAM".to_string()),
+                    0,
+                )
+            })?;
+
+            // Decode LNAM bitstring to FoidKey
+            let foid = FoidKey::decode(lnam_bytes).map_err(|e| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField(format!("Failed to decode LNAM: {}", e)),
+                    0,
+                )
+            })?;
+
+            // Resolve LNAM to EntityId via foid_index
+            let feature_entity = *world.foid_index.get(&foid).ok_or_else(|| {
+                ParseError::at(
+                    ParseErrorKind::InvalidField(format!(
+                        "Referenced feature LNAM not found: agen={}, fidn={}, fids={}",
+                        foid.agen, foid.fidn, foid.fids
+                    )),
+                    0,
+                )
+            })?;
+
+            related_features.push(feature_entity);
+        }
+
+        // Get or create FeaturePointers component
+        let pointers = world
+            .feature_pointers
+            .entry(entity)
+            .or_insert_with(FeaturePointers::default);
+
+        pointers.related_features = related_features;
 
         Ok(())
     }
