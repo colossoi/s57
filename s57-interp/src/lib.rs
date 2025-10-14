@@ -17,3 +17,203 @@ pub mod systems;
 // Re-export key types from s57-parse for convenience
 pub use s57_parse::bitstring::{FoidKey, NameKey};
 pub use s57_parse::{ParseError, ParseErrorKind, Result};
+
+use ecs::{DatasetParams, FeatureAttributes, World};
+use num_bigint::BigInt;
+use s57_parse::ddr::{SubfieldValue, DDR};
+use s57_parse::S57File;
+use systems::{
+    FeatureBindSystem, FoidDecodeSystem, GeometrySystem, NameDecodeSystem, TopologySystem,
+};
+
+/// Build a World from an S57File
+///
+/// Processes all records in the S57 file and populates the ECS World with:
+/// - Vector entities (from VRID records)
+/// - Feature entities (from FRID/FOID records)
+/// - Exact coordinates (from SG2D/SG3D records)
+/// - Topology (from VRPT records)
+/// - Feature bindings (from FSPT/FFPT records)
+/// - Attributes (from ATTF/NATF records)
+///
+/// # Arguments
+/// * `file` - Parsed S57File from s57-parse
+///
+/// # Returns
+/// World populated with all entities and components, or ParseError on failure
+pub fn build_world(file: &S57File) -> Result<World> {
+    let mut world = World::new();
+    let records = file.records();
+
+    // Parse DDR first
+    let ddr = if let Some(ddr_record) = records.first() {
+        if ddr_record.leader.is_ddr() {
+            DDR::parse(ddr_record)?
+        } else {
+            return Err(ParseError::at(
+                ParseErrorKind::InvalidField("First record is not DDR".to_string()),
+                0,
+            ));
+        }
+    } else {
+        return Err(ParseError::at(
+            ParseErrorKind::InvalidField("Empty file".to_string()),
+            0,
+        ));
+    };
+
+    // First pass: Extract dataset parameters from DSPM field
+    for record in &records[1..] {
+        if let Some(dspm_field) = record.fields.iter().find(|f| f.tag == "DSPM") {
+            if let Ok(parsed) = ddr.parse_field_data(dspm_field) {
+                if let Some(group) = parsed.groups().first() {
+                    let comf = get_int(group, "COMF").unwrap_or(10_000_000);
+                    let somf = get_int(group, "SOMF").unwrap_or(100);
+                    let duni = get_int(group, "DUNI").unwrap_or(1) as u16;
+                    let huni = get_int(group, "HUNI").unwrap_or(1) as u16;
+                    let puni = get_int(group, "PUNI").unwrap_or(1) as u16;
+                    let hdat = get_int(group, "HDAT").unwrap_or(2) as u16;
+                    let vdat = get_int(group, "VDAT").unwrap_or(0) as u16;
+                    let sdat = get_int(group, "SDAT").unwrap_or(0) as u16;
+                    let cscl = get_int(group, "CSCL").unwrap_or(1) as u32;
+
+                    world.dataset_params = Some(DatasetParams {
+                        comf: BigInt::from(comf),
+                        somf: BigInt::from(somf),
+                        duni,
+                        huni,
+                        puni,
+                        hdat,
+                        vdat,
+                        sdat,
+                        cscl,
+                    });
+                    break;
+                }
+            }
+        }
+    }
+
+    // Second pass: Create entities from VRID (vectors) and FRID/FOID (features)
+    for record in &records[1..] {
+        // Process vector records
+        if let Some(vrid_field) = record.fields.iter().find(|f| f.tag == "VRID") {
+            if let Ok(parsed) = ddr.parse_field_data(vrid_field) {
+                let entity = NameDecodeSystem::process_vrid(&mut world, &parsed)?;
+
+                // Process SG2D geometry if present
+                if let Some(sg2d_field) = record.fields.iter().find(|f| f.tag == "SG2D") {
+                    if let Ok(parsed_sg2d) = ddr.parse_field_data(sg2d_field) {
+                        let _ = GeometrySystem::process_sg2d(&mut world, entity, &parsed_sg2d);
+                    }
+                }
+
+                // Process SG3D geometry if present
+                if let Some(sg3d_field) = record.fields.iter().find(|f| f.tag == "SG3D") {
+                    if let Ok(parsed_sg3d) = ddr.parse_field_data(sg3d_field) {
+                        let _ = GeometrySystem::process_sg3d(&mut world, entity, &parsed_sg3d);
+                    }
+                }
+
+                // Process VRPT topology if present
+                if let Some(vrpt_field) = record.fields.iter().find(|f| f.tag == "VRPT") {
+                    if let Ok(parsed_vrpt) = ddr.parse_field_data(vrpt_field) {
+                        let _ = TopologySystem::process_vrpt(&mut world, entity, &parsed_vrpt);
+                    }
+                }
+            }
+        }
+
+        // Process feature records
+        if let Some(frid_field) = record.fields.iter().find(|f| f.tag == "FRID") {
+            if let Some(foid_field) = record.fields.iter().find(|f| f.tag == "FOID") {
+                if let Ok(parsed_frid) = ddr.parse_field_data(frid_field) {
+                    if let Ok(parsed_foid) = ddr.parse_field_data(foid_field) {
+                        let entity = FoidDecodeSystem::process_feature(
+                            &mut world,
+                            &parsed_frid,
+                            &parsed_foid,
+                        )?;
+
+                        // Process ATTF attributes if present
+                        if let Some(attf_field) = record.fields.iter().find(|f| f.tag == "ATTF") {
+                            if let Ok(parsed_attf) = ddr.parse_field_data(attf_field) {
+                                let mut attf = Vec::new();
+                                for group in parsed_attf.groups() {
+                                    let attl = get_int(group, "ATTL").unwrap_or(0) as u16;
+                                    let atvl = get_string(group, "ATVL").unwrap_or_default();
+                                    attf.push((attl, atvl));
+                                }
+                                let attrs = world
+                                    .feature_attributes
+                                    .entry(entity)
+                                    .or_insert_with(FeatureAttributes::default);
+                                attrs.attf = attf;
+                            }
+                        }
+
+                        // Process NATF attributes if present
+                        if let Some(natf_field) = record.fields.iter().find(|f| f.tag == "NATF") {
+                            if let Ok(parsed_natf) = ddr.parse_field_data(natf_field) {
+                                let mut natf = Vec::new();
+                                for group in parsed_natf.groups() {
+                                    let attl = get_int(group, "ATTL").unwrap_or(0) as u16;
+                                    let atvl = get_string(group, "ATVL").unwrap_or_default();
+                                    natf.push((attl, atvl));
+                                }
+                                let attrs = world
+                                    .feature_attributes
+                                    .entry(entity)
+                                    .or_insert_with(FeatureAttributes::default);
+                                attrs.natf = natf;
+                            }
+                        }
+
+                        // Process FSPT spatial pointers if present
+                        if let Some(fspt_field) = record.fields.iter().find(|f| f.tag == "FSPT") {
+                            if let Ok(parsed_fspt) = ddr.parse_field_data(fspt_field) {
+                                let _ = FeatureBindSystem::process_fspt(
+                                    &mut world,
+                                    entity,
+                                    &parsed_fspt,
+                                );
+                            }
+                        }
+
+                        // Process FFPT feature pointers if present
+                        if let Some(ffpt_field) = record.fields.iter().find(|f| f.tag == "FFPT") {
+                            if let Ok(parsed_ffpt) = ddr.parse_field_data(ffpt_field) {
+                                let _ = FeatureBindSystem::process_ffpt(
+                                    &mut world,
+                                    entity,
+                                    &parsed_ffpt,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(world)
+}
+
+/// Helper: extract integer value from subfield group
+fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
+    group
+        .iter()
+        .find(|(l, _)| l == label)
+        .and_then(|(_, v)| v.as_int())
+}
+
+/// Helper: extract string value from subfield group
+fn get_string(group: &[(String, SubfieldValue)], label: &str) -> Option<String> {
+    group.iter().find(|(l, _)| l == label).and_then(|(_, v)| {
+        if let SubfieldValue::String(s) = v {
+            Some(s.clone())
+        } else {
+            None
+        }
+    })
+}

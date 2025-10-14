@@ -301,6 +301,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "env_logger",
+ "s57-catalogue",
+ "s57-interp",
  "s57-parse",
 ]
 

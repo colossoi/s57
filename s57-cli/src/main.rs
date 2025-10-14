@@ -1,3 +1,5 @@
+mod features;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use s57_parse::S57File;
 use std::path::PathBuf;
@@ -36,6 +38,16 @@ enum Commands {
         /// Limit number of records to print (only for yaml format)
         #[arg(short, long, default_value = "10")]
         limit: usize,
+    },
+
+    /// List all feature objects in the file
+    ListFeatures,
+
+    /// Show detailed data for a specific feature object
+    ShowObject {
+        /// Feature record ID (RCID) to display
+        #[arg(value_name = "RCID")]
+        rcid: u32,
     },
 }
 
@@ -91,6 +103,12 @@ fn main() {
                 print_hex(&file, *record);
             }
         },
+        Commands::ListFeatures => {
+            features::list_features(&file);
+        }
+        Commands::ShowObject { rcid } => {
+            features::show_object(&file, *rcid);
+        }
     }
 }
 

@@ -236,6 +236,24 @@ pub enum Attribute {
 }
 
 impl Attribute {
+    /// Get human-readable attribute name from ATTL code
+    ///
+    /// Returns a descriptive name for common S-57 attributes, or None for unknown codes.
+    pub fn attribute_name(attl: u16) -> Option<&'static str> {
+        match attl {
+            19 => Some("CATSLN (Category of shoreline construction)"),
+            33 => Some("CATLIT (Category of light)"),
+            35 => Some("COLOUR (Colour)"),
+            57 => Some("NATSUR (Nature of surface)"),
+            87 => Some("DRVAL1 (Depth range value 1)"),
+            88 => Some("DRVAL2 (Depth range value 2)"),
+            116 => Some("OBJNAM (Object name)"),
+            118 => Some("STATUS (Status)"),
+            171 => Some("VALNMR (Value of nominal range)"),
+            _ => None,
+        }
+    }
+
     /// Decode attribute from code and string value
     pub fn from_code_and_value(attl: u16, atvl: &str) -> Option<Self> {
         let attr = match attl {
