@@ -4,7 +4,9 @@
 //! structured entities and components. Each system focuses on a specific
 //! transformation step in the pipeline.
 
-use crate::ecs::{EntityType, FeatureMeta, VectorMeta, World};
+use crate::ecs::{EntityType, ExactDepths, ExactPositions, FeatureMeta, VectorMeta, World};
+use num_bigint::BigInt;
+use num_rational::BigRational;
 use s57_parse::bitstring::{FoidKey, NameKey};
 use s57_parse::ddr::{ParsedField, SubfieldValue};
 use s57_parse::{ParseError, ParseErrorKind, Result};
@@ -222,31 +224,42 @@ impl FoidDecodeSystem {
     }
 }
 
-/// GeometrySystem: Process SG2D/SG3D records to extract coordinate arrays
+/// GeometrySystem: Process SG2D/SG3D records into exact coordinates
 ///
-/// Transforms already-parsed spatial geometry fields into ECS components:
-/// - SG2D: 2D coordinates (Y, X) in coordinate units → Geometry2D
-/// - SG3D: 3D coordinates (Y, X, Z) with sounding depth → Geometry3D
+/// Transforms already-parsed spatial geometry fields directly into exact
+/// BigRational lat/lon/depth values:
+/// - SG2D: (Y, X) → ExactPositions (lat = Y/COMF, lon = X/COMF)
+/// - SG3D: (Y, X, Z) → ExactPositions + ExactDepths (depth = Z/SOMF)
 ///
-/// Input: ParsedField from s57-parse (already validated and parsed)
-/// Output: Geometry2D or Geometry3D component with Vec<(i32, i32)> or Vec<(i32, i32, i32)>
+/// Requires DatasetParams to be set in World for COMF/SOMF values.
+///
+/// Input: ParsedField from s57-parse + DatasetParams
+/// Output: ExactPositions and ExactDepths components (BigRational)
 pub struct GeometrySystem;
 
 impl GeometrySystem {
-    /// Process SG2D field to extract 2D coordinates
+    /// Process SG2D field into exact positions
     ///
     /// # Arguments
-    /// * `world` - ECS world to update
-    /// * `entity` - Entity to attach geometry to
+    /// * `world` - ECS world with DatasetParams
+    /// * `entity` - Entity to attach positions to
     /// * `sg2d` - Parsed SG2D field
     ///
     /// # Returns
-    /// Ok(()) if successful, or ParseError if validation fails
+    /// Ok(()) if successful, or ParseError if params/data missing
     pub fn process_sg2d(
         world: &mut World,
         entity: crate::ecs::EntityId,
         sg2d: &ParsedField,
     ) -> Result<()> {
+        // Get dataset params (required for COMF)
+        let params = world.dataset_params.as_ref().ok_or_else(|| {
+            ParseError::at(
+                ParseErrorKind::InvalidField("Dataset params not set".to_string()),
+                0,
+            )
+        })?;
+
         let groups = sg2d.groups();
         if groups.is_empty() {
             return Err(ParseError::at(
@@ -255,45 +268,60 @@ impl GeometrySystem {
             ));
         }
 
-        // Extract coordinate pairs from groups
-        let mut coords_yx = Vec::with_capacity(groups.len());
+        // Extract coordinate pairs and convert to exact BigRational
+        let mut lat = Vec::with_capacity(groups.len());
+        let mut lon = Vec::with_capacity(groups.len());
+
         for group in groups {
-            let ycoo = Self::get_int(group, "YCOO").ok_or_else(|| {
+            let y = Self::get_int(group, "YCOO").ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG2D missing YCOO".to_string()),
                     0,
                 )
             })?;
-            let xcoo = Self::get_int(group, "XCOO").ok_or_else(|| {
+            let x = Self::get_int(group, "XCOO").ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG2D missing XCOO".to_string()),
                     0,
                 )
             })?;
-            coords_yx.push((ycoo, xcoo));
+
+            // lat = y / COMF (degrees)
+            lat.push(BigRational::new(BigInt::from(y), params.comf.clone()));
+            // lon = x / COMF (degrees)
+            lon.push(BigRational::new(BigInt::from(x), params.comf.clone()));
         }
 
-        // Create Geometry2D component
-        let geom = crate::ecs::Geometry2D { coords_yx };
-        world.geometry_2d.insert(entity, geom);
+        // Create ExactPositions component
+        world
+            .exact_positions
+            .insert(entity, ExactPositions { lat, lon });
 
         Ok(())
     }
 
-    /// Process SG3D field to extract 3D coordinates
+    /// Process SG3D field into exact positions and depths
     ///
     /// # Arguments
-    /// * `world` - ECS world to update
-    /// * `entity` - Entity to attach geometry to
+    /// * `world` - ECS world with DatasetParams
+    /// * `entity` - Entity to attach positions/depths to
     /// * `sg3d` - Parsed SG3D field
     ///
     /// # Returns
-    /// Ok(()) if successful, or ParseError if validation fails
+    /// Ok(()) if successful, or ParseError if params/data missing
     pub fn process_sg3d(
         world: &mut World,
         entity: crate::ecs::EntityId,
         sg3d: &ParsedField,
     ) -> Result<()> {
+        // Get dataset params (required for COMF/SOMF)
+        let params = world.dataset_params.as_ref().ok_or_else(|| {
+            ParseError::at(
+                ParseErrorKind::InvalidField("Dataset params not set".to_string()),
+                0,
+            )
+        })?;
+
         let groups = sg3d.groups();
         if groups.is_empty() {
             return Err(ParseError::at(
@@ -302,33 +330,52 @@ impl GeometrySystem {
             ));
         }
 
-        // Extract coordinate triplets from groups
-        let mut coords_yxz = Vec::with_capacity(groups.len());
+        // Extract coordinate triplets and convert to exact BigRational
+        let mut lat = Vec::with_capacity(groups.len());
+        let mut lon = Vec::with_capacity(groups.len());
+        let mut depth = Vec::with_capacity(groups.len());
+
         for group in groups {
-            let ycoo = Self::get_int(group, "YCOO").ok_or_else(|| {
+            let y = Self::get_int(group, "YCOO").ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG3D missing YCOO".to_string()),
                     0,
                 )
             })?;
-            let xcoo = Self::get_int(group, "XCOO").ok_or_else(|| {
+            let x = Self::get_int(group, "XCOO").ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG3D missing XCOO".to_string()),
                     0,
                 )
             })?;
-            let ve3d = Self::get_int(group, "VE3D").ok_or_else(|| {
+            let z = Self::get_int(group, "VE3D").ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG3D missing VE3D".to_string()),
                     0,
                 )
             })?;
-            coords_yxz.push((ycoo, xcoo, ve3d));
+
+            // lat = y / COMF (degrees)
+            lat.push(BigRational::new(BigInt::from(y), params.comf.clone()));
+            // lon = x / COMF (degrees)
+            lon.push(BigRational::new(BigInt::from(x), params.comf.clone()));
+            // depth = z / SOMF (DUNI units, typically metres)
+            depth.push(BigRational::new(BigInt::from(z), params.somf.clone()));
         }
 
-        // Create Geometry3D component
-        let geom = crate::ecs::Geometry3D { coords_yxz };
-        world.geometry_3d.insert(entity, geom);
+        // Create ExactPositions component
+        world
+            .exact_positions
+            .insert(entity, ExactPositions { lat, lon });
+
+        // Create ExactDepths component
+        world.exact_depths.insert(
+            entity,
+            ExactDepths {
+                depth,
+                units: params.duni,
+            },
+        );
 
         Ok(())
     }

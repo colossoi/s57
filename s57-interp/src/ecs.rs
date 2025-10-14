@@ -42,8 +42,6 @@ pub struct World {
     /// Component storage (sparse - not all entities have all components)
     pub dataset_params: Option<DatasetParams>,
     pub vector_meta: HashMap<EntityId, VectorMeta>,
-    pub geometry_2d: HashMap<EntityId, Geometry2D>,
-    pub geometry_3d: HashMap<EntityId, Geometry3D>,
     pub vector_topology: HashMap<EntityId, VectorTopology>,
     pub feature_meta: HashMap<EntityId, FeatureMeta>,
     pub feature_attributes: HashMap<EntityId, FeatureAttributes>,
@@ -85,8 +83,6 @@ impl World {
     pub fn remove_entity(&mut self, entity: EntityId) {
         self.entities.remove(entity);
         self.vector_meta.remove(&entity);
-        self.geometry_2d.remove(&entity);
-        self.geometry_3d.remove(&entity);
         self.vector_topology.remove(&entity);
         self.feature_meta.remove(&entity);
         self.feature_attributes.remove(&entity);
@@ -156,26 +152,6 @@ pub struct VectorMeta {
     pub rver: u16,
     /// Record update instruction (1=insert, 2=delete, 3=modify)
     pub ruin: u8,
-}
-
-/// Geometry2D: 2D coordinate array from SG2D field
-///
-/// Raw integer coordinates (Y, X) in COMF units.
-/// Y = latitude * COMF, X = longitude * COMF
-#[derive(Debug, Clone)]
-pub struct Geometry2D {
-    /// Raw (Y, X) coordinate pairs in COMF units
-    pub coords_yx: Vec<(i32, i32)>,
-}
-
-/// Geometry3D: 3D coordinate array from SG3D field
-///
-/// Raw integer coordinates (Y, X, Z) in COMF/SOMF units.
-/// Y = latitude * COMF, X = longitude * COMF, Z = depth * SOMF
-#[derive(Debug, Clone)]
-pub struct Geometry3D {
-    /// Raw (Y, X, Z) coordinate triplets (COMF, COMF, SOMF units)
-    pub coords_yxz: Vec<(i32, i32, i32)>,
 }
 
 /// VectorTopology: Vector relationships from VRPT field
