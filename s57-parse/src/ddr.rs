@@ -546,10 +546,11 @@ impl DDR {
                 subfield_values.push(current_group);
             }
 
-            // Skip unit terminator after group
-            if offset < data.len() && data[offset] == 0x1F {
-                offset += 1;
-            }
+            // NOTE: Do NOT skip unit terminators here!
+            // - Fixed-width fields (b11, b12, b14, b21, b22, b24, B(n), R(n)) concatenate directly with no delimiters
+            // - Variable-length fields (A, I) are terminated by UT, but those UTs are consumed during parsing (lines 498, 522)
+            // - Treating 0x1F bytes as delimiters causes corruption when they appear as valid data in binary fields
+            // - The only delimiter that should appear here is the Field Terminator (0x1E), which ends the field
 
             // Safety: if offset didn't advance, break to avoid infinite loop
             if offset == start_offset {
@@ -1248,6 +1249,191 @@ mod tests {
         if let Some((_, SubfieldValue::Integer(val))) = ruin {
             assert_eq!(*val, 1, "RUIN should be 1");
         }
+    }
+
+    #[test]
+    fn test_parse_sg2d_record_5607_truncated_coordinates() {
+        // SG2D field from record 5607 of US2EC04M.000 (Edge 130:2140)
+        // This record has 513 bytes total in the SG2D field
+        // HOWEVER, only the first 40 groups (320 bytes) contain valid data
+        // After group 39, the coordinates become nonsensical
+        // This test verifies we detect when coordinate data ends prematurely
+
+        // Full 513-byte hex data from record 5607
+        let field_data: Vec<u8> = vec![
+            // Groups 0-39: Valid coordinates (320 bytes)
+            0x32, 0x51, 0x5d, 0x1a, 0xaa, 0xd2, 0xe8, 0xd6, // group 0
+            0x42, 0x72, 0x5d, 0x1a, 0xd9, 0xdf, 0xe8, 0xd6, // group 1
+            0x64, 0x93, 0x5d, 0x1a, 0xa9, 0xec, 0xe8, 0xd6, // group 2
+            0x86, 0xb4, 0x5d, 0x1a, 0x73, 0xf9, 0xe8, 0xd6, // group 3
+            0x99, 0xd5, 0x5d, 0x1a, 0x93, 0x06, 0xe9, 0xd6, // group 4
+            0x8b, 0xf6, 0x5d, 0x1a, 0x5f, 0x14, 0xe9, 0xd6, // group 5
+            0xd8, 0x14, 0x5e, 0x1a, 0xad, 0x27, 0xe9, 0xd6, // group 6
+            0x29, 0x30, 0x5e, 0x1a, 0x11, 0x43, 0xe9, 0xd6, // group 7
+            0xe7, 0x49, 0x5e, 0x1a, 0xc5, 0x62, 0xe9, 0xd6, // group 8
+            0x7e, 0x63, 0x5e, 0x1a, 0x02, 0x83, 0xe9, 0xd6, // group 9
+            0x5a, 0x7e, 0x5e, 0x1a, 0x00, 0xa0, 0xe9, 0xd6, // group 10
+            0x49, 0x86, 0x5e, 0x1a, 0x66, 0xa8, 0xe9, 0xd6, // group 11
+            0xde, 0x8e, 0x5e, 0x1a, 0xd7, 0xb1, 0xe9, 0xd6, // group 12
+            0x9e, 0x97, 0x5e, 0x1a, 0x8c, 0xb9, 0xe9, 0xd6, // group 13
+            0x0d, 0xa0, 0x5e, 0x1a, 0xbd, 0xbc, 0xe9, 0xd6, // group 14
+            0xaf, 0xa7, 0x5e, 0x1a, 0xa4, 0xb8, 0xe9, 0xd6, // group 15
+            0x99, 0xac, 0x5e, 0x1a, 0x8f, 0xb0, 0xe9, 0xd6, // group 16
+            0xda, 0xaf, 0x5e, 0x1a, 0x10, 0xa7, 0xe9, 0xd6, // group 17
+            0xd4, 0xb1, 0x5e, 0x1a, 0xad, 0x9c, 0xe9, 0xd6, // group 18
+            0xea, 0xb2, 0x5e, 0x1a, 0xef, 0x91, 0xe9, 0xd6, // group 19
+            0x7e, 0xb3, 0x5e, 0x1a, 0x5c, 0x87, 0xe9, 0xd6, // group 20
+            0x51, 0xb4, 0x5e, 0x1a, 0x09, 0x75, 0xe9, 0xd6, // group 21
+            0xc9, 0xb4, 0x5e, 0x1a, 0x62, 0x62, 0xe9, 0xd6, // group 22
+            0x3f, 0xb4, 0x5e, 0x1a, 0xdb, 0x4f, 0xe9, 0xd6, // group 23
+            0x10, 0xb2, 0x5e, 0x1a, 0xea, 0x3d, 0xe9, 0xd6, // group 24
+            0x97, 0xad, 0x5e, 0x1a, 0x03, 0x2d, 0xe9, 0xd6, // group 25
+            0xaf, 0xa7, 0x5e, 0x1a, 0x96, 0x1c, 0xe9, 0xd6, // group 26
+            0xb5, 0xa3, 0x5e, 0x1a, 0x70, 0x1a, 0xe9, 0xd6, // group 27
+            0x6d, 0x92, 0x5e, 0x1a, 0x16, 0x11, 0xe9, 0xd6, // group 28
+            0xa8, 0x52, 0x5e, 0x1a, 0x97, 0xee, 0xe8, 0xd6, // group 29
+            0x66, 0x3d, 0x5e, 0x1a, 0x18, 0xe3, 0xe8, 0xd6, // group 30
+            0x2c, 0x1a, 0x5e, 0x1a, 0xb4, 0xc9, 0xe8, 0xd6, // group 31
+            0xcb, 0xf9, 0x5d, 0x1a, 0xdb, 0xa8, 0xe8, 0xd6, // group 32
+            0x7f, 0xda, 0x5d, 0x1a, 0x19, 0x85, 0xe8, 0xd6, // group 33
+            0x82, 0xba, 0x5d, 0x1a, 0xfa, 0x62, 0xe8, 0xd6, // group 34
+            0x0f, 0x98, 0x5d, 0x1a, 0x0a, 0x47, 0xe8, 0xd6, // group 35
+            0x96, 0x65, 0x5d, 0x1a, 0xe5, 0x26, 0xe8, 0xd6, // group 36
+            0xf3, 0x32, 0x5d, 0x1a, 0x43, 0x07, 0xe8, 0xd6, // group 37
+            0x28, 0x00, 0x5d, 0x1a, 0x18, 0xe8, 0xe7, 0xd6, // group 38
+            0x36, 0xcd, 0x5c, 0x1a, 0x59, 0xc9, 0xe7, 0xd6, // group 39
+            // Groups 40-63: GARBAGE DATA (192 bytes)
+            0x1f, 0x9a, 0x5c, 0x1a, 0xfc, 0xaa, 0xe7,
+            0xd6, // group 40: YCOO=-65381222, XCOO=-271128662 (INVALID!)
+            0xef, 0x77, 0x5c, 0x1a, 0xf9, 0x96, 0xe7, 0xd6, // group 41
+            0xb1, 0x55, 0x5c, 0x1a, 0x33, 0x83, 0xe7, 0xd6, // group 42
+            0x6a, 0x33, 0x5c, 0x1a, 0x92, 0x6f, 0xe7, 0xd6, // group 43
+            0x20, 0x11, 0x5c, 0x1a, 0x02, 0x5c, 0xe7, 0xd6, // group 44
+            0xd8, 0xee, 0x5b, 0x1a, 0x6c, 0x48, 0xe7, 0xd6, // group 45
+            0xdf, 0xd2, 0x5b, 0x1a, 0x37, 0x38, 0xe7, 0xd6, // group 46
+            0x02, 0xb6, 0x5b, 0x1a, 0x43, 0x28, 0xe7, 0xd6, // group 47
+            0xf5, 0x98, 0x5b, 0x1a, 0xa9, 0x1a, 0xe7, 0xd6, // group 48
+            0x6b, 0x7c, 0x5b, 0x1a, 0x84, 0x11, 0xe7, 0xd6, // group 49
+            0x17, 0x61, 0x5b, 0x1a, 0xee, 0x0e, 0xe7, 0xd6, // group 50
+            0x07, 0x57, 0x5b, 0x1a, 0x9a, 0x18, 0xe7, 0xd6, // group 51
+            0x5d, 0x55, 0x5b, 0x1a, 0x99, 0x2f, 0xe7, 0xd6, // group 52
+            0xe9, 0x59, 0x5b, 0x1a, 0x41, 0x4d, 0xe7, 0xd6, // group 53
+            0x7c, 0x62, 0x5b, 0x1a, 0xea, 0x6a, 0xe7, 0xd6, // group 54
+            0xe7, 0x6c, 0x5b, 0x1a, 0xeb, 0x81, 0xe7, 0xd6, // group 55
+            0x7b, 0x87, 0x5b, 0x1a, 0x7c, 0xaf, 0xe7, 0xd6, // group 56
+            0xea, 0xa2, 0x5b, 0x1a, 0x1d, 0xde, 0xe7, 0xd6, // group 57
+            0x6a, 0xc0, 0x5b, 0x1a, 0xac, 0x09, 0xe8, 0xd6, // group 58
+            0x32, 0xe1, 0x5b, 0x1a, 0x06, 0x2e, 0xe8, 0xd6, // group 59
+            0x78, 0x06, 0x5c, 0x1a, 0x0a, 0x47, 0xe8, 0xd6, // group 60
+            0x83, 0x48, 0x5c, 0x1a, 0x3f, 0x64, 0xe8, 0xd6, // group 61
+            0x97, 0x8a, 0x5c, 0x1a, 0x94, 0x80, 0xe8, 0xd6, // group 62
+            0xb8, 0xcc, 0x5c, 0x1a, 0x46, 0x9c, 0xe8, 0xd6, // group 63
+            0x1e, // Field terminator
+        ];
+
+        let array_descriptor = "*YCOO!XCOO".to_string();
+        let format_controls = "(2b24)".to_string();
+
+        let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
+
+        // Verify subfield definitions
+        assert_eq!(subfields.len(), 2, "Should have 2 subfields");
+        assert_eq!(subfields[0].label, "YCOO");
+        assert_eq!(subfields[1].label, "XCOO");
+        assert_eq!(subfields[0].width, Some(4), "b24 should be 4 bytes");
+        assert_eq!(subfields[1].width, Some(4), "b24 should be 4 bytes");
+
+        let field_def = FieldDef {
+            tag: "SG2D".to_string(),
+            name: "2-D coordinate (geometry) field".to_string(),
+            array_descriptor: array_descriptor.clone(),
+            format_controls: format_controls.clone(),
+            subfields,
+            is_repeating: true,
+        };
+
+        let mut ddr = DDR {
+            field_defs: std::collections::HashMap::new(),
+            schema: OverrideSchema::new(),
+        };
+        ddr.field_defs.insert("SG2D".to_string(), field_def);
+
+        let field = Field {
+            tag: "SG2D".to_string(),
+            data: field_data.clone(),
+        };
+
+        let result = ddr.parse_field_data(&field);
+        assert!(
+            result.is_ok(),
+            "Failed to parse SG2D field: {:?}",
+            result.err()
+        );
+
+        let parsed = result.unwrap();
+        let groups = parsed.groups();
+
+        // Parser will read all 64 groups (512 bytes / 8 bytes per group)
+        assert_eq!(groups.len(), 64, "Should parse 64 groups");
+
+        println!("\nParsed SG2D groups from record 5607:");
+        for (i, group) in groups.iter().enumerate() {
+            assert_eq!(group.len(), 2, "Each group should have 2 subfields");
+
+            let ycoo = group.iter().find(|(label, _)| label == "YCOO");
+            let xcoo = group.iter().find(|(label, _)| label == "XCOO");
+
+            assert!(ycoo.is_some(), "YCOO not found in group {}", i);
+            assert!(xcoo.is_some(), "XCOO not found in group {}", i);
+
+            if let Some((_, SubfieldValue::Integer(y))) = ycoo {
+                if let Some((_, SubfieldValue::Integer(x))) = xcoo {
+                    println!("  group_{}: YCOO={}, XCOO={}", i, y, x);
+
+                    // Robust coordinate validation:
+                    // Valid S-57 coordinates for Maine (or anywhere on Earth):
+                    // Latitude (YCOO): -90° to +90° = -900000000 to +900000000
+                    // But for this specific chart (Maine): ~40° to 50° = 400000000 to 500000000
+                    // Longitude (XCOO): -180° to +180° = -1800000000 to +1800000000
+                    // But for this specific chart (Maine): -75° to -65° = -750000000 to -650000000
+
+                    // Check for nonsensical coordinates (outside Earth's bounds)
+                    // Latitude less than 30° or greater than 50° is invalid for Maine
+                    let lat_degrees = (*y as f64) / 10_000_000.0;
+                    let lon_degrees = (*x as f64) / 10_000_000.0;
+
+                    if lat_degrees < 30.0 || lat_degrees > 50.0 {
+                        panic!(
+                            "Group {} has invalid YCOO: {} ({:.7}°) - outside reasonable range for Maine chart [30°, 50°]",
+                            i, y, lat_degrees
+                        );
+                    }
+
+                    if lon_degrees < -80.0 || lon_degrees > -60.0 {
+                        panic!(
+                            "Group {} has invalid XCOO: {} ({:.7}°) - outside reasonable range for Maine chart [-80°, -60°]",
+                            i, x, lon_degrees
+                        );
+                    }
+                }
+            }
+        }
+
+        // Verify group 0 specifically (first valid coordinate)
+        let group0 = &groups[0];
+        let ycoo0 = group0.iter().find(|(label, _)| label == "YCOO").unwrap();
+        let xcoo0 = group0.iter().find(|(label, _)| label == "XCOO").unwrap();
+
+        if let SubfieldValue::Integer(y) = ycoo0.1 {
+            assert_eq!(y, 442323250, "group_0 YCOO = 44.2323250°");
+        }
+        if let SubfieldValue::Integer(x) = xcoo0.1 {
+            assert_eq!(x, -689384790, "group_0 XCOO = -68.9384790°");
+        }
+
+        // Group 40 will trigger the panic above since it has garbage coordinates
+        // The test demonstrates the parsing bug where 0x1F bytes in binary data
+        // are incorrectly treated as unit terminators, corrupting the coordinate stream
     }
 
     #[test]

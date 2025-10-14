@@ -1,4 +1,6 @@
 mod features;
+mod render;
+mod svg;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use s57_parse::S57File;
@@ -48,6 +50,25 @@ enum Commands {
         /// Feature record ID (RCID) to display
         #[arg(value_name = "RCID")]
         rcid: u32,
+    },
+
+    /// Render features to SVG
+    Render {
+        /// Output SVG file path
+        #[arg(short, long, value_name = "FILE")]
+        output: PathBuf,
+
+        /// Maximum number of features to render
+        #[arg(short, long)]
+        limit: Option<usize>,
+
+        /// Canvas width in pixels
+        #[arg(long, default_value = "1200")]
+        width: u32,
+
+        /// Canvas height in pixels
+        #[arg(long, default_value = "800")]
+        height: u32,
     },
 }
 
@@ -108,6 +129,14 @@ fn main() {
         }
         Commands::ShowObject { rcid } => {
             features::show_object(&file, *rcid);
+        }
+        Commands::Render {
+            output,
+            limit,
+            width,
+            height,
+        } => {
+            render::render_to_svg(&file, output, *limit, *width, *height);
         }
     }
 }

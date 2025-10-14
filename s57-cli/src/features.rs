@@ -166,9 +166,32 @@ pub fn show_object(file: &S57File, target_rcid: u32) {
                         255 => "N/A",
                         _ => "unknown",
                     };
+                    let rcnm_str = match vmeta.name.rcnm {
+                        110 => "VI (Isolated Node)",
+                        120 => "VC (Connected Node)",
+                        130 => "VE (Edge)",
+                        _ => "Unknown",
+                    };
+                    let usag_str = match sref.usag {
+                        1 => "exterior",
+                        2 => "interior",
+                        3 => "exterior (truncated by limit)",
+                        _ => "",
+                    };
                     println!(
-                        "  [{}] Vector NAME {}:{} (ornt={}, usag={}, mask={})",
-                        idx, vmeta.name.rcnm, vmeta.name.rcid, ornt_str, sref.usag, sref.mask
+                        "  [{}] Vector {} {}:{} (ornt={}, usag={}{}, mask={})",
+                        idx,
+                        rcnm_str,
+                        vmeta.name.rcnm,
+                        vmeta.name.rcid,
+                        ornt_str,
+                        sref.usag,
+                        if usag_str.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{}]", usag_str)
+                        },
+                        sref.mask
                     );
 
                     // Try to resolve coordinates via TTS (handles both direct and topology-derived)
