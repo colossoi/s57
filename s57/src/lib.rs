@@ -5,10 +5,11 @@
 //!
 //! S-57 files are encoded using the ISO 8211 standard.
 
-pub mod iso8211;
+pub mod bitstring;
+pub mod ddr;
 pub mod error;
 pub mod interpret;
-pub mod ddr;
+pub mod iso8211;
 pub mod s57_schema;
 
 pub use error::{ParseError, ParseErrorKind, Result};

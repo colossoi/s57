@@ -59,7 +59,10 @@ impl Field {
 
         // After first UT and before FT (0x1E) is the list of field tag pairs
         let after_ut = &self.data[first_ut + 1..];
-        let tag_pairs_end = after_ut.iter().position(|&b| b == 0x1E).unwrap_or(after_ut.len());
+        let tag_pairs_end = after_ut
+            .iter()
+            .position(|&b| b == 0x1E)
+            .unwrap_or(after_ut.len());
         let tag_pairs_data = &after_ut[..tag_pairs_end];
 
         // Parse tag pairs - each pair is 2 consecutive 4-character tags (parent, child)
@@ -69,8 +72,8 @@ impl Field {
         let chars: Vec<char> = tag_pairs_str.chars().collect();
         let mut i = 0;
         while i + 7 < chars.len() {
-            let parent: String = chars[i..i+4].iter().collect();
-            let child: String = chars[i+4..i+8].iter().collect();
+            let parent: String = chars[i..i + 4].iter().collect();
+            let child: String = chars[i + 4..i + 8].iter().collect();
             tag_pairs.push((parent, child));
             i += 8;
         }
@@ -119,13 +122,21 @@ impl Field {
 
         // Third part: format controls (may have FT at end)
         let format_part = parts[2];
-        let format_controls = if !format_part.is_empty() && format_part[format_part.len() - 1] == 0x1E {
-            String::from_utf8_lossy(&format_part[..format_part.len() - 1]).trim().to_string()
-        } else {
-            String::from_utf8_lossy(format_part).trim().to_string()
-        };
+        let format_controls =
+            if !format_part.is_empty() && format_part[format_part.len() - 1] == 0x1E {
+                String::from_utf8_lossy(&format_part[..format_part.len() - 1])
+                    .trim()
+                    .to_string()
+            } else {
+                String::from_utf8_lossy(format_part).trim().to_string()
+            };
 
-        Some((field_controls, field_name, array_descriptor, format_controls))
+        Some((
+            field_controls,
+            field_name,
+            array_descriptor,
+            format_controls,
+        ))
     }
 }
 

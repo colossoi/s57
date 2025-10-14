@@ -5,13 +5,13 @@
 //! - Data Descriptive Record (DDR) - describes the structure
 //! - Data Records (DR) - contain the actual data
 
-mod leader;
 mod directory;
 mod field;
+mod leader;
 
-pub use leader::Leader;
 pub use directory::{Directory, DirectoryEntry};
 pub use field::Field;
+pub use leader::Leader;
 
 use crate::error::{ParseError, ParseErrorKind, Result};
 use log::{debug, trace};
@@ -94,7 +94,11 @@ fn parse_record(data: &[u8], file_offset: usize) -> Result<(Record, usize)> {
 }
 
 /// Parse field data based on directory entries
-fn parse_fields(field_area: &[u8], directory: &Directory, base_offset: usize) -> Result<Vec<Field>> {
+fn parse_fields(
+    field_area: &[u8],
+    directory: &Directory,
+    base_offset: usize,
+) -> Result<Vec<Field>> {
     let mut fields = Vec::new();
 
     for entry in &directory.entries {
@@ -128,17 +132,18 @@ mod tests {
     fn test_parse_leader() {
         // Build a proper 24-byte leader
         let leader_bytes = concat!(
-            "01582",  // Record length (5 bytes)
-            "3",      // Interchange level (1 byte)
-            "L",      // Leader identifier (1 byte)
-            "E",      // Inline code extension (1 byte)
-            "1",      // Version (1 byte)
-            " ",      // Application indicator (1 byte)
-            "09",     // Field control length (2 bytes)
-            "00020",  // Base address of field area (5 bytes)
-            " ! ",    // Extended character set (3 bytes)
-            "3404"    // Entry map (4 bytes)
-        ).as_bytes();
+            "01582", // Record length (5 bytes)
+            "3",     // Interchange level (1 byte)
+            "L",     // Leader identifier (1 byte)
+            "E",     // Inline code extension (1 byte)
+            "1",     // Version (1 byte)
+            " ",     // Application indicator (1 byte)
+            "09",    // Field control length (2 bytes)
+            "00020", // Base address of field area (5 bytes)
+            " ! ",   // Extended character set (3 bytes)
+            "3404"   // Entry map (4 bytes)
+        )
+        .as_bytes();
 
         assert_eq!(leader_bytes.len(), 24);
         let leader = Leader::parse(leader_bytes).unwrap();

@@ -79,16 +79,18 @@ fn main() {
         Commands::Info => {
             print_info(&cli.file, data.len(), &file);
         }
-        Commands::Print { format, record, limit } => {
-            match format {
-                OutputFormat::Yaml => {
-                    print_yaml(&file, *record, *limit);
-                }
-                OutputFormat::Hex => {
-                    print_hex(&file, *record);
-                }
+        Commands::Print {
+            format,
+            record,
+            limit,
+        } => match format {
+            OutputFormat::Yaml => {
+                print_yaml(&file, *record, *limit);
             }
-        }
+            OutputFormat::Hex => {
+                print_hex(&file, *record);
+            }
+        },
     }
 }
 
@@ -135,7 +137,13 @@ fn print_info(path: &PathBuf, file_size: usize, file: &S57File) {
                     for (tag, def) in ddr.field_defs() {
                         if !tag.starts_with('0') {
                             let repeating = if def.is_repeating { " [repeating]" } else { "" };
-                            println!("  {}: {} ({} subfields{})", tag, def.name, def.subfield_count(), repeating);
+                            println!(
+                                "  {}: {} ({} subfields{})",
+                                tag,
+                                def.name,
+                                def.subfield_count(),
+                                repeating
+                            );
                         }
                     }
                 }
@@ -155,7 +163,11 @@ fn print_yaml(file: &S57File, record_filter: Option<usize>, limit: usize) {
         if record_num < records.len() {
             vec![&records[record_num]]
         } else {
-            eprintln!("Error: Record {} not found (file has {} records)", record_num, records.len());
+            eprintln!(
+                "Error: Record {} not found (file has {} records)",
+                record_num,
+                records.len()
+            );
             std::process::exit(1);
         }
     } else {
@@ -186,7 +198,11 @@ fn print_hex(file: &S57File, record_filter: Option<usize>) {
         if record_num < records.len() {
             vec![(record_num, &records[record_num])]
         } else {
-            eprintln!("Error: Record {} not found (file has {} records)", record_num, records.len());
+            eprintln!(
+                "Error: Record {} not found (file has {} records)",
+                record_num,
+                records.len()
+            );
             std::process::exit(1);
         }
     } else {
@@ -198,9 +214,15 @@ fn print_hex(file: &S57File, record_filter: Option<usize>) {
         println!("Record {} ({}):", i, record_type);
         println!("  Leader:");
         println!("    Length: {} bytes", record.leader.record_length);
-        println!("    Interchange Level: '{}'", record.leader.interchange_level);
+        println!(
+            "    Interchange Level: '{}'",
+            record.leader.interchange_level
+        );
         println!("    Leader ID: '{}'", record.leader.leader_identifier);
-        println!("    Base Address: {}", record.leader.base_address_of_field_area);
+        println!(
+            "    Base Address: {}",
+            record.leader.base_address_of_field_area
+        );
 
         println!("  Fields:");
         for field in &record.fields {
@@ -210,12 +232,14 @@ fn print_hex(file: &S57File, record_filter: Option<usize>) {
 
             // Print hex dump in rows of 16 bytes
             for (offset, chunk) in field.data.chunks(16).enumerate() {
-                let hex: String = chunk.iter()
+                let hex: String = chunk
+                    .iter()
                     .map(|b| format!("{:02x}", b))
                     .collect::<Vec<_>>()
                     .join(" ");
 
-                let ascii: String = chunk.iter()
+                let ascii: String = chunk
+                    .iter()
                     .map(|&b| {
                         if b >= 0x20 && b <= 0x7E {
                             b as char
@@ -237,7 +261,12 @@ fn print_hex(file: &S57File, record_filter: Option<usize>) {
     }
 }
 
-fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filter: Option<usize>, limit: usize, ddr: &s57::ddr::DDR) {
+fn print_yaml_structure_with_ddr(
+    records: &[&s57::iso8211::Record],
+    record_filter: Option<usize>,
+    limit: usize,
+    ddr: &s57::ddr::DDR,
+) {
     use s57::interpret::*;
 
     // Only show field definitions if not filtering to a specific record
@@ -246,28 +275,56 @@ fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filte
         for (tag, def) in ddr.field_defs() {
             if !tag.starts_with('0') {
                 let repeating = if def.is_repeating { " [repeating]" } else { "" };
-                println!("#   {}: {} ({} subfields{})", tag, def.name, def.subfield_count(), repeating);
+                println!(
+                    "#   {}: {} ({} subfields{})",
+                    tag,
+                    def.name,
+                    def.subfield_count(),
+                    repeating
+                );
             }
         }
         println!();
     }
 
     println!("records:");
-    let records_to_show = if record_filter.is_some() { records.len() } else { limit.min(records.len()) };
+    let records_to_show = if record_filter.is_some() {
+        records.len()
+    } else {
+        limit.min(records.len())
+    };
     for (idx, record) in records.iter().enumerate().take(records_to_show) {
         // When filtering, use the actual record number; otherwise use the index
         let i = record_filter.unwrap_or(idx);
-        let record_type = if record.leader.is_ddr() { "DDR (Data Descriptive Record)" } else { "DR (Data Record)" };
+        let record_type = if record.leader.is_ddr() {
+            "DDR (Data Descriptive Record)"
+        } else {
+            "DR (Data Record)"
+        };
 
         println!("  - record_{}:  # {}", i, record_type);
         println!("      leader:");
-        println!("        record_length: {}  # bytes", record.leader.record_length);
-        println!("        interchange_level: '{}'", record.leader.interchange_level);
-        println!("        leader_identifier: '{}'  # {}",
-            record.leader.leader_identifier,
-            if record.leader.is_ddr() { "Data Descriptive" } else { "Data" }
+        println!(
+            "        record_length: {}  # bytes",
+            record.leader.record_length
         );
-        println!("        base_address_of_field_area: {}", record.leader.base_address_of_field_area);
+        println!(
+            "        interchange_level: '{}'",
+            record.leader.interchange_level
+        );
+        println!(
+            "        leader_identifier: '{}'  # {}",
+            record.leader.leader_identifier,
+            if record.leader.is_ddr() {
+                "Data Descriptive"
+            } else {
+                "Data"
+            }
+        );
+        println!(
+            "        base_address_of_field_area: {}",
+            record.leader.base_address_of_field_area
+        );
 
         println!("      fields:");
         for field in &record.fields {
@@ -294,7 +351,9 @@ fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filte
             // Special handling for 0001 field
             } else if field.tag == "0001" {
                 // Try parsing as DDR record identifier definition first
-                if let Some((controls, name, array_desc, format_controls)) = field.parse_record_identifier_field() {
+                if let Some((controls, name, array_desc, format_controls)) =
+                    field.parse_record_identifier_field()
+                {
                     // DDR: data descriptive field defining record identifier structure
                     println!("          data:");
                     println!("            field_controls: \"{}\"", controls);
@@ -302,11 +361,17 @@ fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filte
                     if !array_desc.is_empty() {
                         println!("            array_descriptor: \"{}\"", array_desc);
                     }
-                    println!("            format_controls: \"{}\"  # Format for record ID in DRs", format_controls);
+                    println!(
+                        "            format_controls: \"{}\"  # Format for record ID in DRs",
+                        format_controls
+                    );
                 } else if let Some((seq_num, _reserved)) = parse_field_control(&field.data) {
                     // Data record: contains sequence number
                     println!("          data:");
-                    println!("            sequence_number: {}  # Record sequence in file", seq_num);
+                    println!(
+                        "            sequence_number: {}  # Record sequence in file",
+                        seq_num
+                    );
                 } else {
                     println!("          data: <binary>  # {} bytes", field.data.len());
                 }
@@ -317,14 +382,25 @@ fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filte
                     println!("          definition:  # Data Descriptive Field (DDF)");
                     println!("            field_name: \"{}\"", field_def.name);
                     if !field_def.array_descriptor.is_empty() {
-                        println!("            array_descriptor: \"{}\"  # Subfield labels", field_def.array_descriptor);
+                        println!(
+                            "            array_descriptor: \"{}\"  # Subfield labels",
+                            field_def.array_descriptor
+                        );
                     }
                     if !field_def.format_controls.is_empty() {
-                        println!("            format_controls: \"{}\"  # Subfield types", field_def.format_controls);
+                        println!(
+                            "            format_controls: \"{}\"  # Subfield types",
+                            field_def.format_controls
+                        );
                     }
-                    println!("            subfield_count: {}  # Number of subfield labels", field_def.subfield_count());
+                    println!(
+                        "            subfield_count: {}  # Number of subfield labels",
+                        field_def.subfield_count()
+                    );
                     if field_def.is_repeating {
-                        println!("            repeating_group: true  # Group can repeat multiple times");
+                        println!(
+                            "            repeating_group: true  # Group can repeat multiple times"
+                        );
                     }
                 } else {
                     println!("          data: <binary>  # {} bytes", field.data.len());
@@ -339,18 +415,33 @@ fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filte
                                 println!("            group_{}:", group_idx);
                             }
                             for (label, value) in group {
-                                let indent = if parsed.groups().len() > 1 { "              " } else { "            " };
+                                let indent = if parsed.groups().len() > 1 {
+                                    "              "
+                                } else {
+                                    "            "
+                                };
                                 match value {
                                     s57::ddr::SubfieldValue::Null => {
                                         println!("{}{}: null", indent, label);
                                     }
                                     s57::ddr::SubfieldValue::Integer(i) => {
                                         let comment = match label.as_str() {
-                                            "RCNM" => format!("  # {}", interpret_record_name(*i as u8)),
-                                            "PRIM" => format!("  # {}", interpret_primitive(*i as u8)),
-                                            "OBJL" => format!("  # {}", interpret_object_label(*i as u16)),
-                                            "RUIN" => format!("  # {}", interpret_update_instruction(*i as u8)),
-                                            "ORNT" => format!("  # {}", interpret_orientation(*i as u8)),
+                                            "RCNM" => {
+                                                format!("  # {}", interpret_record_name(*i as u8))
+                                            }
+                                            "PRIM" => {
+                                                format!("  # {}", interpret_primitive(*i as u8))
+                                            }
+                                            "OBJL" => {
+                                                format!("  # {}", interpret_object_label(*i as u16))
+                                            }
+                                            "RUIN" => format!(
+                                                "  # {}",
+                                                interpret_update_instruction(*i as u8)
+                                            ),
+                                            "ORNT" => {
+                                                format!("  # {}", interpret_orientation(*i as u8))
+                                            }
                                             _ => String::new(),
                                         };
                                         println!("{}{}: {}{}", indent, label, i, comment);
@@ -362,7 +453,9 @@ fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filte
                                         println!("{}{}: \"{}\"", indent, label, s);
                                     }
                                     s57::ddr::SubfieldValue::Bytes(b) => {
-                                        let hex: String = b.iter().take(8)
+                                        let hex: String = b
+                                            .iter()
+                                            .take(8)
                                             .map(|byte| format!("{:02x}", byte))
                                             .collect::<Vec<_>>()
                                             .join(" ");
@@ -385,28 +478,57 @@ fn print_yaml_structure_with_ddr(records: &[&s57::iso8211::Record], record_filte
 
     // Only show "more records" message when not filtering and there are more records
     if record_filter.is_none() && records.len() > limit {
-        println!("  # ... {} more records (use --limit to see more)", records.len() - limit);
+        println!(
+            "  # ... {} more records (use --limit to see more)",
+            records.len() - limit
+        );
     }
 }
 
-fn print_yaml_structure(records: &[&s57::iso8211::Record], record_filter: Option<usize>, limit: usize) {
+fn print_yaml_structure(
+    records: &[&s57::iso8211::Record],
+    record_filter: Option<usize>,
+    limit: usize,
+) {
     use s57::interpret::*;
 
     println!("records:");
-    let records_to_show = if record_filter.is_some() { records.len() } else { limit.min(records.len()) };
+    let records_to_show = if record_filter.is_some() {
+        records.len()
+    } else {
+        limit.min(records.len())
+    };
     for (idx, record) in records.iter().enumerate().take(records_to_show) {
         let i = record_filter.unwrap_or(idx);
-        let record_type = if record.leader.is_ddr() { "DDR (Data Descriptive Record)" } else { "DR (Data Record)" };
+        let record_type = if record.leader.is_ddr() {
+            "DDR (Data Descriptive Record)"
+        } else {
+            "DR (Data Record)"
+        };
 
         println!("  - record_{}:  # {}", i, record_type);
         println!("      leader:");
-        println!("        record_length: {}  # bytes", record.leader.record_length);
-        println!("        interchange_level: '{}'", record.leader.interchange_level);
-        println!("        leader_identifier: '{}'  # {}",
-            record.leader.leader_identifier,
-            if record.leader.is_ddr() { "Data Descriptive" } else { "Data" }
+        println!(
+            "        record_length: {}  # bytes",
+            record.leader.record_length
         );
-        println!("        base_address_of_field_area: {}", record.leader.base_address_of_field_area);
+        println!(
+            "        interchange_level: '{}'",
+            record.leader.interchange_level
+        );
+        println!(
+            "        leader_identifier: '{}'  # {}",
+            record.leader.leader_identifier,
+            if record.leader.is_ddr() {
+                "Data Descriptive"
+            } else {
+                "Data"
+            }
+        );
+        println!(
+            "        base_address_of_field_area: {}",
+            record.leader.base_address_of_field_area
+        );
 
         println!("      fields:");
         for field in &record.fields {
@@ -422,7 +544,10 @@ fn print_yaml_structure(records: &[&s57::iso8211::Record], record_filter: Option
 
     // Only show "more records" message when not filtering and there are more records
     if record_filter.is_none() && records.len() > limit {
-        println!("  # ... {} more records (use --limit to see more)", records.len() - limit);
+        println!(
+            "  # ... {} more records (use --limit to see more)",
+            records.len() - limit
+        );
     }
 }
 
@@ -434,7 +559,10 @@ fn print_field_interpretation(tag: &str, data: &[u8]) {
             if let Some((seq_num, _reserved)) = parse_field_control(data) {
                 // Data record: contains sequence number
                 println!("          data:");
-                println!("            sequence_number: {}  # Record sequence in file", seq_num);
+                println!(
+                    "            sequence_number: {}  # Record sequence in file",
+                    seq_num
+                );
             } else {
                 // DDR: contains field control metadata (text format)
                 if let Ok(text) = std::str::from_utf8(&data[..data.len().saturating_sub(1)]) {
@@ -454,13 +582,29 @@ fn print_field_interpretation(tag: &str, data: &[u8]) {
             let ruin = data[11];
 
             println!("          data:");
-            println!("            RCNM: {}  # {}", rcnm, interpret_record_name(rcnm));
+            println!(
+                "            RCNM: {}  # {}",
+                rcnm,
+                interpret_record_name(rcnm)
+            );
             println!("            RCID: {}  # Record ID", rcid);
-            println!("            PRIM: {}  # {}", prim, interpret_primitive(prim));
+            println!(
+                "            PRIM: {}  # {}",
+                prim,
+                interpret_primitive(prim)
+            );
             println!("            GRUP: {}  # Group", grup);
-            println!("            OBJL: {}  # {}", objl, interpret_object_label(objl));
+            println!(
+                "            OBJL: {}  # {}",
+                objl,
+                interpret_object_label(objl)
+            );
             println!("            RVER: {}  # Record version", rver);
-            println!("            RUIN: {}  # {}", ruin, interpret_update_instruction(ruin));
+            println!(
+                "            RUIN: {}  # {}",
+                ruin,
+                interpret_update_instruction(ruin)
+            );
         }
         "VRID" if data.len() >= 8 => {
             let rcnm = data[0];
@@ -469,10 +613,18 @@ fn print_field_interpretation(tag: &str, data: &[u8]) {
             let ruin = data[7];
 
             println!("          data:");
-            println!("            RCNM: {}  # {}", rcnm, interpret_record_name(rcnm));
+            println!(
+                "            RCNM: {}  # {}",
+                rcnm,
+                interpret_record_name(rcnm)
+            );
             println!("            RCID: {}  # Record ID", rcid);
             println!("            RVER: {}  # Record version", rver);
-            println!("            RUIN: {}  # {}", ruin, interpret_update_instruction(ruin));
+            println!(
+                "            RUIN: {}  # {}",
+                ruin,
+                interpret_update_instruction(ruin)
+            );
         }
         "FOID" if data.len() >= 8 => {
             let agen = u16::from_le_bytes([data[0], data[1]]);
@@ -494,11 +646,24 @@ fn print_field_interpretation(tag: &str, data: &[u8]) {
                     break;
                 }
                 if offset + 8 <= data.len() {
-                    let y = i32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]);
-                    let x = i32::from_le_bytes([data[offset+4], data[offset+5], data[offset+6], data[offset+7]]);
+                    let y = i32::from_le_bytes([
+                        data[offset],
+                        data[offset + 1],
+                        data[offset + 2],
+                        data[offset + 3],
+                    ]);
+                    let x = i32::from_le_bytes([
+                        data[offset + 4],
+                        data[offset + 5],
+                        data[offset + 6],
+                        data[offset + 7],
+                    ]);
                     let lat = y as f64 / 10_000_000.0;
                     let lon = x as f64 / 10_000_000.0;
-                    println!("              - coord_{}: {{ lat: {:.7}, lon: {:.7} }}", coord_num, lat, lon);
+                    println!(
+                        "              - coord_{}: {{ lat: {:.7}, lon: {:.7} }}",
+                        coord_num, lat, lon
+                    );
                     coord_num += 1;
                     offset += 8;
                 }
@@ -517,14 +682,31 @@ fn print_field_interpretation(tag: &str, data: &[u8]) {
                     break;
                 }
                 if offset + 12 <= data.len() {
-                    let y = i32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]);
-                    let x = i32::from_le_bytes([data[offset+4], data[offset+5], data[offset+6], data[offset+7]]);
-                    let z = i32::from_le_bytes([data[offset+8], data[offset+9], data[offset+10], data[offset+11]]);
+                    let y = i32::from_le_bytes([
+                        data[offset],
+                        data[offset + 1],
+                        data[offset + 2],
+                        data[offset + 3],
+                    ]);
+                    let x = i32::from_le_bytes([
+                        data[offset + 4],
+                        data[offset + 5],
+                        data[offset + 6],
+                        data[offset + 7],
+                    ]);
+                    let z = i32::from_le_bytes([
+                        data[offset + 8],
+                        data[offset + 9],
+                        data[offset + 10],
+                        data[offset + 11],
+                    ]);
                     let lat = y as f64 / 10_000_000.0;
                     let lon = x as f64 / 10_000_000.0;
                     let depth = z as f64 / 100.0;
-                    println!("              - coord_{}: {{ lat: {:.7}, lon: {:.7}, depth: {:.2} }}",
-                        coord_num, lat, lon, depth);
+                    println!(
+                        "              - coord_{}: {{ lat: {:.7}, lon: {:.7}, depth: {:.2} }}",
+                        coord_num, lat, lon, depth
+                    );
                     coord_num += 1;
                     offset += 12;
                 }
@@ -544,15 +726,31 @@ fn print_field_interpretation(tag: &str, data: &[u8]) {
                 }
                 if offset + 8 <= data.len() {
                     let name = data[offset];
-                    let rcid = u32::from_le_bytes([data[offset+1], data[offset+2], data[offset+3], data[offset+4]]);
-                    let ornt = data[offset+5];
-                    let usag = data[offset+6];
-                    let mask = data[offset+7];
+                    let rcid = u32::from_le_bytes([
+                        data[offset + 1],
+                        data[offset + 2],
+                        data[offset + 3],
+                        data[offset + 4],
+                    ]);
+                    let ornt = data[offset + 5];
+                    let usag = data[offset + 6];
+                    let mask = data[offset + 7];
 
                     println!("              - pointer_{}:", ptr_num);
-                    println!("                  NAME: {}  # {}", name, interpret_record_name(name));
-                    println!("                  RCID: {}  # Target vector record ID", rcid);
-                    println!("                  ORNT: {}  # {}", ornt, interpret_orientation(ornt));
+                    println!(
+                        "                  NAME: {}  # {}",
+                        name,
+                        interpret_record_name(name)
+                    );
+                    println!(
+                        "                  RCID: {}  # Target vector record ID",
+                        rcid
+                    );
+                    println!(
+                        "                  ORNT: {}  # {}",
+                        ornt,
+                        interpret_orientation(ornt)
+                    );
                     println!("                  USAG: {}  # Usage indicator", usag);
                     println!("                  MASK: {}  # Masking indicator", mask);
                     ptr_num += 1;
@@ -569,7 +767,8 @@ fn print_field_interpretation(tag: &str, data: &[u8]) {
         _ => {
             // For other fields, show hex preview
             if data.len() > 0 {
-                let preview: String = data.iter()
+                let preview: String = data
+                    .iter()
                     .take(16)
                     .map(|b| format!("{:02x}", b))
                     .collect::<Vec<_>>()

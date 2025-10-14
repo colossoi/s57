@@ -89,44 +89,37 @@ impl Leader {
             .to_string();
 
         // Entry map (bytes 20-23)
-        let size_of_field_length_field = (data[20] as char)
-            .to_digit(10)
-            .ok_or_else(|| {
-                ParseError::at(
-                    ParseErrorKind::InvalidLeader("Invalid field length field size".to_string()),
-                    20,
-                )
-            })?
-            as u8;
+        let size_of_field_length_field = (data[20] as char).to_digit(10).ok_or_else(|| {
+            ParseError::at(
+                ParseErrorKind::InvalidLeader("Invalid field length field size".to_string()),
+                20,
+            )
+        })? as u8;
 
-        let size_of_field_position_field = (data[21] as char)
-            .to_digit(10)
-            .ok_or_else(|| {
-                ParseError::at(
-                    ParseErrorKind::InvalidLeader("Invalid field position field size".to_string()),
-                    21,
-                )
-            })?
-            as u8;
+        let size_of_field_position_field = (data[21] as char).to_digit(10).ok_or_else(|| {
+            ParseError::at(
+                ParseErrorKind::InvalidLeader("Invalid field position field size".to_string()),
+                21,
+            )
+        })? as u8;
 
         let reserved = data[22] as char;
 
-        let size_of_field_tag = (data[23] as char)
-            .to_digit(10)
-            .ok_or_else(|| {
-                ParseError::at(
-                    ParseErrorKind::InvalidLeader("Invalid field tag size".to_string()),
-                    23,
-                )
-            })?
-            as u8;
+        let size_of_field_tag = (data[23] as char).to_digit(10).ok_or_else(|| {
+            ParseError::at(
+                ParseErrorKind::InvalidLeader("Invalid field tag size".to_string()),
+                23,
+            )
+        })? as u8;
 
         trace!(
             "Parsed leader: length={}, type={}, base_addr={}, entry_size={}",
             record_length,
             leader_identifier,
             base_address_of_field_area,
-            size_of_field_tag as usize + size_of_field_length_field as usize + size_of_field_position_field as usize
+            size_of_field_tag as usize
+                + size_of_field_length_field as usize
+                + size_of_field_position_field as usize
         );
 
         Ok(Leader {
@@ -173,17 +166,18 @@ mod tests {
         // Build a proper 24-byte DDR leader
         // Positions: 0-4(5) | 5(1) | 6(1) | 7(1) | 8(1) | 9(1) | 10-11(2) | 12-16(5) | 17-19(3) | 20-23(4)
         let data = concat!(
-            "01582",  // Record length (5 bytes)
-            "3",      // Interchange level (1 byte)
-            "L",      // Leader identifier (1 byte)
-            "E",      // Inline code extension (1 byte)
-            "1",      // Version (1 byte)
-            " ",      // Application indicator (1 byte)
-            "09",     // Field control length (2 bytes)
-            "00020",  // Base address of field area (5 bytes)
-            " ! ",    // Extended character set (3 bytes)
-            "3404"    // Entry map (4 bytes)
-        ).as_bytes();
+            "01582", // Record length (5 bytes)
+            "3",     // Interchange level (1 byte)
+            "L",     // Leader identifier (1 byte)
+            "E",     // Inline code extension (1 byte)
+            "1",     // Version (1 byte)
+            " ",     // Application indicator (1 byte)
+            "09",    // Field control length (2 bytes)
+            "00020", // Base address of field area (5 bytes)
+            " ! ",   // Extended character set (3 bytes)
+            "3404"   // Entry map (4 bytes)
+        )
+        .as_bytes();
 
         assert_eq!(data.len(), 24, "Leader must be exactly 24 bytes");
         let leader = Leader::parse(data).unwrap();
@@ -198,17 +192,18 @@ mod tests {
     fn test_parse_dr_leader() {
         // Build a proper 24-byte DR leader
         let data = concat!(
-            "00321",  // Record length (5 bytes)
-            " ",      // Interchange level (1 byte)
-            "D",      // Leader identifier (1 byte)
-            " ",      // Inline code extension (1 byte)
-            " ",      // Version (1 byte)
-            " ",      // Application indicator (1 byte)
-            "  ",     // Field control length (2 bytes)
-            "00065",  // Base address (5 bytes)
-            "   ",    // Charset (3 bytes)
-            "3304"    // Entry map (4 bytes)
-        ).as_bytes();
+            "00321", // Record length (5 bytes)
+            " ",     // Interchange level (1 byte)
+            "D",     // Leader identifier (1 byte)
+            " ",     // Inline code extension (1 byte)
+            " ",     // Version (1 byte)
+            " ",     // Application indicator (1 byte)
+            "  ",    // Field control length (2 bytes)
+            "00065", // Base address (5 bytes)
+            "   ",   // Charset (3 bytes)
+            "3304"   // Entry map (4 bytes)
+        )
+        .as_bytes();
 
         assert_eq!(data.len(), 24, "Leader must be exactly 24 bytes");
         let leader = Leader::parse(data).unwrap();

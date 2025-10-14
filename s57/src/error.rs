@@ -4,13 +4,25 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ParseErrorKind {
     #[error("io error while reading")]
-    Io(#[from] #[source] std::io::Error),
+    Io(
+        #[from]
+        #[source]
+        std::io::Error,
+    ),
 
     #[error("invalid UTF-8: {0}")]
-    InvalidUtf8(#[from] #[source] std::str::Utf8Error),
+    InvalidUtf8(
+        #[from]
+        #[source]
+        std::str::Utf8Error,
+    ),
 
     #[error("invalid integer: {0}")]
-    InvalidInteger(#[from] #[source] std::num::ParseIntError),
+    InvalidInteger(
+        #[from]
+        #[source]
+        std::num::ParseIntError,
+    ),
 
     #[error("invalid record leader: {0}")]
     InvalidLeader(String),
@@ -27,7 +39,9 @@ pub enum ParseErrorKind {
         available: usize,
     },
 
-    #[error("field extends beyond field area: start={start}, length={length}, area_len={area_len}")]
+    #[error(
+        "field extends beyond field area: start={start}, length={length}, area_len={area_len}"
+    )]
     FieldOutOfBounds {
         start: usize,
         length: usize,

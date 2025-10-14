@@ -1,5 +1,5 @@
-use crate::error::{ParseError, ParseErrorKind, Result};
 use super::Leader;
+use crate::error::{ParseError, ParseErrorKind, Result};
 use log::trace;
 
 const FIELD_TERMINATOR: u8 = 0x1E; // ASCII 30 (1/14)
@@ -91,12 +91,20 @@ impl DirectoryEntry {
             .map_err(|e| ParseError::at(ParseErrorKind::from(e), base_offset + offset))?;
         let position: u32 = position_str.trim().parse().map_err(|_| {
             ParseError::at(
-                ParseErrorKind::InvalidDirectory(format!("Invalid field position: '{}'", position_str)),
+                ParseErrorKind::InvalidDirectory(format!(
+                    "Invalid field position: '{}'",
+                    position_str
+                )),
                 base_offset + offset,
             )
         })?;
 
-        trace!("Parsed directory entry: tag={}, length={}, position={}", tag, length, position);
+        trace!(
+            "Parsed directory entry: tag={}, length={}, position={}",
+            tag,
+            length,
+            position
+        );
 
         Ok(DirectoryEntry {
             tag,
@@ -114,17 +122,18 @@ mod tests {
     fn test_parse_directory_entry() {
         // Build a proper 24-byte leader
         let leader_data = concat!(
-            "01582",  // Record length (5 bytes)
-            "3",      // Interchange level (1 byte)
-            "L",      // Leader identifier (1 byte)
-            "E",      // Inline code extension (1 byte)
-            "1",      // Version (1 byte)
-            " ",      // Application indicator (1 byte)
-            "09",     // Field control length (2 bytes)
-            "00020",  // Base address of field area (5 bytes)
-            " ! ",    // Extended character set (3 bytes)
-            "3404"    // Entry map (4 bytes)
-        ).as_bytes();
+            "01582", // Record length (5 bytes)
+            "3",     // Interchange level (1 byte)
+            "L",     // Leader identifier (1 byte)
+            "E",     // Inline code extension (1 byte)
+            "1",     // Version (1 byte)
+            " ",     // Application indicator (1 byte)
+            "09",    // Field control length (2 bytes)
+            "00020", // Base address of field area (5 bytes)
+            " ! ",   // Extended character set (3 bytes)
+            "3404"   // Entry map (4 bytes)
+        )
+        .as_bytes();
 
         assert_eq!(leader_data.len(), 24);
         let leader = Leader::parse(leader_data).unwrap();
