@@ -1,3 +1,4 @@
+use num_traits::ToPrimitive;
 use s57_catalogue::{AttributeInfo, ObjectClass};
 use s57_interp::ecs::EntityType;
 use s57_parse::S57File;
@@ -170,23 +171,40 @@ pub fn show_object(file: &S57File, target_rcid: u32) {
                         idx, vmeta.name.rcnm, vmeta.name.rcid, ornt_str, sref.usag, sref.mask
                     );
 
-                    // Show coordinates if available
-                    if let Some(positions) = world.exact_positions.get(&sref.entity) {
-                        let (lat_f64, lon_f64) = positions.to_f64();
-                        if !lat_f64.is_empty() {
-                            println!("       {} coordinate points", lat_f64.len());
-                            if lat_f64.len() <= 5 {
-                                for i in 0..lat_f64.len() {
-                                    println!("         ({:.7}, {:.7})", lat_f64[i], lon_f64[i]);
+                    // Try to resolve coordinates via TTS (handles both direct and topology-derived)
+                    use s57_interp::topology::{EdgeWalker, TraversalContext};
+
+                    let ctx = TraversalContext::new(&world);
+                    let mut walker = EdgeWalker::new(&ctx);
+
+                    match walker.resolve_line_2d(vmeta.name) {
+                        Ok(coords) => {
+                            if !coords.is_empty() {
+                                println!("       {} coordinate points", coords.len());
+                                if coords.len() <= 5 {
+                                    for (lat, lon) in &coords {
+                                        // Convert BigRational to f64 for display
+                                        let lat_f64 = lat.to_f64().unwrap_or(0.0);
+                                        let lon_f64 = lon.to_f64().unwrap_or(0.0);
+                                        println!("         ({:.7}, {:.7})", lat_f64, lon_f64);
+                                    }
+                                } else {
+                                    let first_lat = coords[0].0.to_f64().unwrap_or(0.0);
+                                    let first_lon = coords[0].1.to_f64().unwrap_or(0.0);
+                                    let last_lat =
+                                        coords[coords.len() - 1].0.to_f64().unwrap_or(0.0);
+                                    let last_lon =
+                                        coords[coords.len() - 1].1.to_f64().unwrap_or(0.0);
+                                    println!(
+                                        "         First: ({:.7}, {:.7})",
+                                        first_lat, first_lon
+                                    );
+                                    println!("         Last:  ({:.7}, {:.7})", last_lat, last_lon);
                                 }
-                            } else {
-                                println!("         First: ({:.7}, {:.7})", lat_f64[0], lon_f64[0]);
-                                println!(
-                                    "         Last:  ({:.7}, {:.7})",
-                                    lat_f64[lat_f64.len() - 1],
-                                    lon_f64[lon_f64.len() - 1]
-                                );
                             }
+                        }
+                        Err(e) => {
+                            println!("       (topology resolution failed: {})", e);
                         }
                     }
                 }

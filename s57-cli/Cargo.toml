@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.48", features = ["derive"] }
 env_logger = "0.11.8"
+num-traits = "0.2"
 s57-parse = { path = "../s57-parse" }
 s57-interp = { path = "../s57-interp" }
 s57-catalogue = { path = "../s57-catalogue" }

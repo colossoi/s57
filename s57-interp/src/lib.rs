@@ -13,6 +13,7 @@
 
 pub mod ecs;
 pub mod systems;
+pub mod topology;
 
 // Re-export key types from s57-parse for convenience
 pub use s57_parse::bitstring::{FoidKey, NameKey};
