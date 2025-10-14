@@ -2,18 +2,42 @@
 
 use log::info;
 use num_traits::ToPrimitive;
+use s57_catalogue::ObjectClass;
 use s57_interp::ecs::{EntityId, EntityType, World};
 use s57_interp::topology::{ContinuityPolicy, EdgeWalker, FeatureBoundaryCursor, TraversalContext};
 use s57_parse::S57File;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 pub fn render_to_svg(
     file: &S57File,
     output_path: &PathBuf,
     limit: Option<usize>,
+    feature_filter: Option<u32>,
+    class_filter: &[String],
     width: u32,
     height: u32,
 ) {
+    // Parse class filter into object codes
+    let allowed_classes: HashSet<u16> = {
+        let mut classes = HashSet::new();
+        for class_name in class_filter {
+            match ObjectClass::from_str(class_name) {
+                Ok(obj_class) => {
+                    classes.insert(obj_class.code());
+                }
+                Err(_) => {
+                    info!("Unknown object class '{}', skipping", class_name);
+                }
+            }
+        }
+        if classes.is_empty() {
+            log::error!("No valid object classes specified");
+            std::process::exit(1);
+        }
+        classes
+    };
     // Build ECS World from S57 file
     let world = match s57_interp::build_world(file) {
         Ok(world) => world,
@@ -43,8 +67,20 @@ pub fn render_to_svg(
 
     for entity in features.iter().take(feature_count) {
         if let Some(meta) = world.feature_meta.get(entity) {
+            // Filter by specific feature if requested
+            if let Some(fidn) = feature_filter {
+                if meta.foid.fidn != fidn {
+                    continue;
+                }
+            }
+
             // Skip metadata features (chart quality/coverage info, objl 300-312)
             if meta.objl >= 300 && meta.objl <= 312 {
+                continue;
+            }
+
+            // Filter by object class
+            if !allowed_classes.contains(&meta.objl) {
                 continue;
             }
 
@@ -181,19 +217,71 @@ fn render_line(
     }
 }
 
+/// Determine fill and stroke colors based on object class code
+fn get_area_colors(objl: u16) -> (String, String, f64) {
+    match objl {
+        // Water areas - light blue fill
+        42 | 17003 => ("#87ceeb".to_string(), "#4682b4".to_string(), 0.5), // DEPARE - Depth area
+        119 => ("#87ceeb".to_string(), "#4682b4".to_string(), 0.5), // SEAARE - Sea area / named water area
+
+        // Land areas - green
+        71 => ("#90ee90".to_string(), "#228b22".to_string(), 0.5), // LNDARE - Land area
+
+        // Zone-type features - transparent with colored outline
+        1 => ("none".to_string(), "#ff6b6b".to_string(), 1.5), // ADMARE - Administration area
+        4 | 17001 => ("none".to_string(), "#9370db".to_string(), 1.5), // ACHARE - Anchorage area
+        27 => ("none".to_string(), "#ffa500".to_string(), 2.0), // CTNARE - Caution area
+        31 => ("none".to_string(), "#4169e1".to_string(), 1.5), // CONZNE - Contiguous zone
+        32 => ("none".to_string(), "#4682b4".to_string(), 1.5), // COSARE - Continental shelf area
+        37 => ("none".to_string(), "#daa520".to_string(), 1.5), // CUSZNE - Custom zone
+        40 => ("none".to_string(), "#ff1493".to_string(), 2.0), // DWRTCL - Deep water route centerline
+        41 => ("none".to_string(), "#ff69b4".to_string(), 1.5), // DWRTPT - Deep water route part
+        50 => ("none".to_string(), "#1e90ff".to_string(), 1.5), // EXEZNE - Exclusive Economic Zone
+        51 => ("none".to_string(), "#00ced1".to_string(), 2.0), // FAIRWY - Fairway
+        54 => ("none".to_string(), "#20b2aa".to_string(), 1.5), // FSHZNE - Fishery zone
+        63 | 17014 => ("none".to_string(), "#6a5acd".to_string(), 1.5), // HRBARE - Harbour area
+        68 => ("none".to_string(), "#48d1cc".to_string(), 1.5), // ISTZNE - Inshore traffic zone
+        83 => ("none".to_string(), "#dc143c".to_string(), 2.0), // MIPARE - Military practice area
+        88 => ("none".to_string(), "#ff8c00".to_string(), 1.5), // OSPARE - Offshore production area
+        96 => ("none".to_string(), "#ffa500".to_string(), 2.0), // PRCARE - Precautionary area
+        97 => ("none".to_string(), "#ff8c00".to_string(), 1.5), // PRDARE - Production/storage area
+        108 => ("none".to_string(), "#ff1493".to_string(), 2.0), // RCRTCL - Recommended route centerline
+        112 | 17005 => ("none".to_string(), "#ff0000".to_string(), 2.0), // RESARE - Restricted area
+        135 => ("none".to_string(), "#4682b4".to_string(), 1.5), // TESARE - Territorial sea area
+        150 => ("none".to_string(), "#ff00ff".to_string(), 2.0), // TSEZNE - Traffic Separation Zone
+        152 => ("none".to_string(), "#ff69b4".to_string(), 1.5), // TWRTPT - Two-way route part
+
+        // Default - light green with darker outline
+        _ => ("#90ee90".to_string(), "#228b22".to_string(), 0.5),
+    }
+}
+
 fn render_area(
-    _world: &World,
+    world: &World,
     ctx: &TraversalContext,
     foid: s57_parse::bitstring::FoidKey,
     feature_id: &str,
     renderer: &mut crate::svg::SvgRenderer,
 ) {
+    // Get object class for color selection
+    let objl = world
+        .feature_meta
+        .values()
+        .find(|meta| meta.foid == foid)
+        .map(|meta| meta.objl)
+        .unwrap_or(0);
+
+    let (fill, stroke, stroke_width) = get_area_colors(objl);
+
     // Use FeatureBoundaryCursor to resolve area boundary rings
     let cursor = FeatureBoundaryCursor::new(ctx, foid);
 
     match cursor.resolve_rings() {
         Ok(rings) => {
             info!("Resolved {} rings for feature {}", rings.len(), feature_id);
+
+            // Convert all rings to f64 coordinates
+            let mut converted_rings = Vec::new();
             for (i, ring) in rings.iter().enumerate() {
                 info!("Ring {} has {} points", i, ring.len());
                 let points: Vec<_> = ring
@@ -202,12 +290,37 @@ fn render_area(
                     .collect();
 
                 if !points.is_empty() {
-                    info!("Adding polygon with {} points", points.len());
+                    converted_rings.push(points);
+                }
+            }
+
+            // Render as polygon with holes if we have multiple rings
+            if !converted_rings.is_empty() {
+                if converted_rings.len() == 1 {
+                    // Simple polygon without holes
+                    info!(
+                        "Adding simple polygon with {} points",
+                        converted_rings[0].len()
+                    );
                     renderer.add_polygon(
-                        points,
-                        "#90ee90".to_string(),
-                        "#008000".to_string(),
-                        0.5,
+                        converted_rings.into_iter().next().unwrap(),
+                        fill,
+                        stroke,
+                        stroke_width,
+                        Some(feature_id.to_string()),
+                    );
+                } else {
+                    // Polygon with holes
+                    info!(
+                        "Adding polygon with {} rings (1 exterior + {} holes)",
+                        converted_rings.len(),
+                        converted_rings.len() - 1
+                    );
+                    renderer.add_polygon_with_holes(
+                        converted_rings,
+                        fill,
+                        stroke,
+                        stroke_width,
                         Some(feature_id.to_string()),
                     );
                 }

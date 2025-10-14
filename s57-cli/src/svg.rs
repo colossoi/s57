@@ -23,6 +23,14 @@ pub enum Primitive {
         stroke_width: f64,
         id: Option<String>,
     },
+    /// Polygon with holes (exterior ring + interior holes)
+    PolygonWithHoles {
+        rings: Vec<Vec<(f64, f64)>>, // First ring is exterior, rest are holes
+        fill: String,
+        stroke: String,
+        stroke_width: f64,
+        id: Option<String>,
+    },
     /// Point marker
     Point {
         lat: f64,
@@ -104,6 +112,29 @@ impl SvgRenderer {
         self.update_bbox(points.iter().copied());
         self.primitives.push(Primitive::Polygon {
             points,
+            fill,
+            stroke,
+            stroke_width,
+            id,
+        });
+    }
+
+    /// Add a polygon with holes to the renderer
+    /// First ring is the exterior boundary, remaining rings are interior holes
+    pub fn add_polygon_with_holes(
+        &mut self,
+        rings: Vec<Vec<(f64, f64)>>,
+        fill: String,
+        stroke: String,
+        stroke_width: f64,
+        id: Option<String>,
+    ) {
+        // Update bbox with all rings
+        for ring in &rings {
+            self.update_bbox(ring.iter().copied());
+        }
+        self.primitives.push(Primitive::PolygonWithHoles {
+            rings,
             fill,
             stroke,
             stroke_width,
@@ -271,6 +302,51 @@ impl SvgRenderer {
                     write!(
                         writer,
                         "\" fill=\"{}\" stroke=\"{}\" stroke-width=\"{}\"",
+                        fill, stroke, stroke_width
+                    )?;
+                    if let Some(id_val) = id {
+                        write!(writer, " data-feature-id=\"{}\"", escape_xml(id_val))?;
+                    }
+                    writeln!(writer, "/>")?;
+                }
+                Primitive::PolygonWithHoles {
+                    rings,
+                    fill,
+                    stroke,
+                    stroke_width,
+                    id,
+                } => {
+                    // Use SVG path element with fill-rule="evenodd" to handle holes
+                    write!(writer, "  <path d=\"")?;
+
+                    for (ring_idx, ring) in rings.iter().enumerate() {
+                        if ring.is_empty() {
+                            continue;
+                        }
+
+                        // Move to first point
+                        let (lat, lon) = ring[0];
+                        let (x, y) = self.transform(lat, lon);
+                        write!(writer, "M {:.2},{:.2} ", x, y)?;
+
+                        // Line to subsequent points
+                        for &(lat, lon) in &ring[1..] {
+                            let (x, y) = self.transform(lat, lon);
+                            write!(writer, "L {:.2},{:.2} ", x, y)?;
+                        }
+
+                        // Close path
+                        write!(writer, "Z ")?;
+
+                        // Space between rings for readability
+                        if ring_idx < rings.len() - 1 {
+                            write!(writer, "")?;
+                        }
+                    }
+
+                    write!(
+                        writer,
+                        "\" fill=\"{}\" stroke=\"{}\" stroke-width=\"{}\" fill-rule=\"evenodd\"",
                         fill, stroke, stroke_width
                     )?;
                     if let Some(id_val) = id {

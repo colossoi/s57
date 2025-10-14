@@ -62,6 +62,20 @@ enum Commands {
         #[arg(short, long)]
         limit: Option<usize>,
 
+        /// Render only a specific feature by FIDN (Feature ID Number)
+        #[arg(long, value_name = "FIDN")]
+        feature: Option<u32>,
+
+        /// Filter by comma-separated list of S-57 object class codes (e.g., "COALNE,BRIDGE,WRECKS")
+        /// Use 6-character S-57 codes from the object catalogue.
+        #[arg(
+            long,
+            value_name = "CLASSES",
+            value_delimiter = ',',
+            default_value = "COALNE,LNDARE,DEPARE,DEPCNT,SEAARE,BRIDGE,BUISGL,LNDMRK,LIGHTS,BCNCAR,BCNLAT,BCNISD,BCNSAW,BOYCAR,BOYLAT,BOYISD,BOYSAW,ACHARE,WRECKS,OBSTRN,RIVERS,LAKARE,CANALS,DAMCON,BERTHS,HRBARE,RESARE,FAIRWY,PILBOP,OSPARE"
+        )]
+        classes: Vec<String>,
+
         /// Canvas width in pixels
         #[arg(long, default_value = "1200")]
         width: u32,
@@ -133,10 +147,12 @@ fn main() {
         Commands::Render {
             output,
             limit,
+            feature,
+            classes,
             width,
             height,
         } => {
-            render::render_to_svg(&file, output, *limit, *width, *height);
+            render::render_to_svg(&file, output, *limit, *feature, classes, *width, *height);
         }
     }
 }

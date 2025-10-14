@@ -85,20 +85,34 @@ impl<'a> FeatureBoundaryCursor<'a> {
 
         let mut rings = Vec::new();
 
-        // Resolve exterior ring first
+        // Resolve exterior rings (USAG=1)
+        // Note: typically there's one exterior ring, but could be multiple disconnected boundaries
         if !exterior_refs.is_empty() {
+            // Try resolving all exterior refs as one connected ring
             let exterior_ring = self.resolve_ring_from_refs(&mut walker, &exterior_refs)?;
             if !exterior_ring.is_empty() {
                 rings.push(exterior_ring);
             }
+            // TODO: handle case where exterior refs form multiple disconnected rings
+            // This would require connectivity analysis to group refs into separate rings
         }
 
-        // Resolve interior rings (holes)
+        // Resolve interior rings (USAG=2) - holes/islands
+        // Each interior ref typically represents a separate island/hole
+        // If an island boundary spans multiple edges, they should be sequential in the FSPT list
         if !interior_refs.is_empty() {
-            let interior_ring = self.resolve_ring_from_refs(&mut walker, &interior_refs)?;
-            if !interior_ring.is_empty() {
-                rings.push(interior_ring);
+            // Current approach: each interior ref is resolved as its own ring
+            // This works when each ref is either:
+            // - A single closed edge forming a complete island boundary
+            // - Part of a sequence that resolve_ring_from_refs will stitch together
+            for iref in interior_refs {
+                let interior_ring = self.resolve_ring_from_refs(&mut walker, &[iref])?;
+                if !interior_ring.is_empty() {
+                    rings.push(interior_ring);
+                }
             }
+            // TODO: For complex cases with multiple edges per island, implement connectivity
+            // analysis to group interior refs by which island they belong to
         }
 
         Ok(rings)
