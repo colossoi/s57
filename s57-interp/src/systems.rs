@@ -14,6 +14,95 @@ use s57_parse::bitstring::{FoidKey, NameKey};
 use s57_parse::ddr::{ParsedField, SubfieldValue};
 use s57_parse::{ParseError, ParseErrorKind, Result};
 
+/// Helper: Extract u8 from subfield group
+/// Returns Ok(None) if field not present, Err if present but wrong type or out of range
+fn get_u8(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u8>> {
+    match group.iter().find(|(l, _)| l == label) {
+        None => Ok(None),
+        Some((_, SubfieldValue::Integer(i))) if *i >= 0 && *i <= u8::MAX as i32 => {
+            Ok(Some(*i as u8))
+        }
+        Some((_, SubfieldValue::UnsignedInteger(u))) if *u <= u8::MAX as u32 => Ok(Some(*u as u8)),
+        Some((_, _)) => Err(ParseError::at(
+            ParseErrorKind::InvalidField(format!(
+                "{} has wrong type or value out of range for u8",
+                label
+            )),
+            0,
+        )),
+    }
+}
+
+/// Helper: Extract u16 from subfield group
+/// Returns Ok(None) if field not present, Err if present but wrong type or out of range
+fn get_u16(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u16>> {
+    match group.iter().find(|(l, _)| l == label) {
+        None => Ok(None),
+        Some((_, SubfieldValue::Integer(i))) if *i >= 0 && *i <= u16::MAX as i32 => {
+            Ok(Some(*i as u16))
+        }
+        Some((_, SubfieldValue::UnsignedInteger(u))) if *u <= u16::MAX as u32 => {
+            Ok(Some(*u as u16))
+        }
+        Some((_, _)) => Err(ParseError::at(
+            ParseErrorKind::InvalidField(format!(
+                "{} has wrong type or value out of range for u16",
+                label
+            )),
+            0,
+        )),
+    }
+}
+
+/// Helper: Extract u32 from subfield group
+/// Returns Ok(None) if field not present, Err if present but wrong type or negative
+fn get_u32(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<u32>> {
+    match group.iter().find(|(l, _)| l == label) {
+        None => Ok(None),
+        Some((_, SubfieldValue::Integer(i))) if *i >= 0 => Ok(Some(*i as u32)),
+        Some((_, SubfieldValue::UnsignedInteger(u))) => Ok(Some(*u)),
+        Some((_, _)) => Err(ParseError::at(
+            ParseErrorKind::InvalidField(format!(
+                "{} has wrong type or negative value for u32",
+                label
+            )),
+            0,
+        )),
+    }
+}
+
+/// Helper: Extract i32 from subfield group
+/// Returns Ok(None) if field not present, Err if present but wrong type
+fn get_i32(group: &[(String, SubfieldValue)], label: &str) -> Result<Option<i32>> {
+    match group.iter().find(|(l, _)| l == label) {
+        None => Ok(None),
+        Some((_, SubfieldValue::Integer(i))) => Ok(Some(*i)),
+        Some((_, SubfieldValue::UnsignedInteger(u))) if *u <= i32::MAX as u32 => {
+            Ok(Some(*u as i32))
+        }
+        Some((_, _)) => Err(ParseError::at(
+            ParseErrorKind::InvalidField(format!(
+                "{} has wrong type or value out of range for i32",
+                label
+            )),
+            0,
+        )),
+    }
+}
+
+/// Helper: Extract bytes from subfield group
+/// Returns Ok(None) if field not present, Err if present but wrong type
+fn get_bytes<'a>(group: &'a [(String, SubfieldValue)], label: &str) -> Result<Option<&'a [u8]>> {
+    match group.iter().find(|(l, _)| l == label) {
+        None => Ok(None),
+        Some((_, SubfieldValue::Bytes(bytes))) => Ok(Some(bytes.as_slice())),
+        Some((_, _)) => Err(ParseError::at(
+            ParseErrorKind::InvalidField(format!("{} has wrong type, expected bytes", label)),
+            0,
+        )),
+    }
+}
+
 /// NameDecodeSystem: Process VRID records to create vector entities
 ///
 /// Extracts vector metadata from VRID (Vector Record Identifier) fields:
@@ -49,26 +138,26 @@ impl NameDecodeSystem {
         let group = &groups[0];
 
         // Extract RCNM (required)
-        let rcnm = Self::get_int(group, "RCNM").ok_or_else(|| {
+        let rcnm = get_u8(group, "RCNM")?.ok_or_else(|| {
             ParseError::at(
                 ParseErrorKind::InvalidField("VRID missing RCNM".to_string()),
                 0,
             )
-        })? as u8;
+        })?;
 
         // Extract RCID (required)
-        let rcid = Self::get_int(group, "RCID").ok_or_else(|| {
+        let rcid = get_u32(group, "RCID")?.ok_or_else(|| {
             ParseError::at(
                 ParseErrorKind::InvalidField("VRID missing RCID".to_string()),
                 0,
             )
-        })? as u32;
+        })?;
 
         // Extract RVER (optional, default 1)
-        let rver = Self::get_int(group, "RVER").unwrap_or(1) as u16;
+        let rver = get_u16(group, "RVER")?.unwrap_or(1);
 
         // Extract RUIN (optional, default 1=insert)
-        let ruin = Self::get_int(group, "RUIN").unwrap_or(1) as u8;
+        let ruin = get_u8(group, "RUIN")?.unwrap_or(1);
 
         // Create NameKey
         let name = NameKey { rcnm, rcid };
@@ -89,14 +178,6 @@ impl NameDecodeSystem {
         world.vector_meta.insert(entity, meta);
 
         Ok(entity)
-    }
-
-    /// Helper: extract integer value from subfield group
-    fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
-        group
-            .iter()
-            .find(|(l, _)| l == label)
-            .and_then(|(_, v)| v.as_int())
     }
 }
 
@@ -141,25 +222,25 @@ impl FoidDecodeSystem {
             )
         })?;
 
-        let _rcnm = Self::get_int(frid_group, "RCNM").ok_or_else(|| {
+        let _rcnm = get_u8(frid_group, "RCNM")?.ok_or_else(|| {
             ParseError::at(
                 ParseErrorKind::InvalidField("FRID missing RCNM".to_string()),
                 0,
             )
-        })? as u8;
+        })?;
 
-        let _rcid = Self::get_int(frid_group, "RCID").ok_or_else(|| {
+        let _rcid = get_u32(frid_group, "RCID")?.ok_or_else(|| {
             ParseError::at(
                 ParseErrorKind::InvalidField("FRID missing RCID".to_string()),
                 0,
             )
-        })? as u32;
+        })?;
 
-        let prim = Self::get_int(frid_group, "PRIM").unwrap_or(255) as u8;
-        let grup = Self::get_int(frid_group, "GRUP").unwrap_or(1) as u8;
-        let objl = Self::get_int(frid_group, "OBJL").unwrap_or(0) as u16;
-        let rver = Self::get_int(frid_group, "RVER").unwrap_or(1) as u16;
-        let ruin = Self::get_int(frid_group, "RUIN").unwrap_or(1) as u8;
+        let prim = get_u8(frid_group, "PRIM")?.unwrap_or(255);
+        let grup = get_u8(frid_group, "GRUP")?.unwrap_or(1);
+        let objl = get_u16(frid_group, "OBJL")?.unwrap_or(0);
+        let rver = get_u16(frid_group, "RVER")?.unwrap_or(1);
+        let ruin = get_u8(frid_group, "RUIN")?.unwrap_or(1);
 
         // Extract FOID subfields
         let foid_group = foid.groups().first().ok_or_else(|| {
@@ -169,26 +250,26 @@ impl FoidDecodeSystem {
             )
         })?;
 
-        let agen = Self::get_int(foid_group, "AGEN").ok_or_else(|| {
+        let agen = get_u16(foid_group, "AGEN")?.ok_or_else(|| {
             ParseError::at(
                 ParseErrorKind::InvalidField("FOID missing AGEN".to_string()),
                 0,
             )
-        })? as u16;
+        })?;
 
-        let fidn = Self::get_int(foid_group, "FIDN").ok_or_else(|| {
+        let fidn = get_u32(foid_group, "FIDN")?.ok_or_else(|| {
             ParseError::at(
                 ParseErrorKind::InvalidField("FOID missing FIDN".to_string()),
                 0,
             )
-        })? as u32;
+        })?;
 
-        let fids = Self::get_int(foid_group, "FIDS").ok_or_else(|| {
+        let fids = get_u16(foid_group, "FIDS")?.ok_or_else(|| {
             ParseError::at(
                 ParseErrorKind::InvalidField("FOID missing FIDS".to_string()),
                 0,
             )
-        })? as u16;
+        })?;
 
         // Create FoidKey
         let foid_key = FoidKey { agen, fidn, fids };
@@ -216,14 +297,6 @@ impl FoidDecodeSystem {
         world.feature_meta.insert(entity, meta);
 
         Ok(entity)
-    }
-
-    /// Helper: extract integer value from subfield group
-    fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
-        group
-            .iter()
-            .find(|(l, _)| l == label)
-            .and_then(|(_, v)| v.as_int())
     }
 }
 
@@ -276,13 +349,13 @@ impl GeometrySystem {
         let mut lon = Vec::with_capacity(groups.len());
 
         for group in groups {
-            let y = Self::get_int(group, "YCOO").ok_or_else(|| {
+            let y = get_i32(group, "YCOO")?.ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG2D missing YCOO".to_string()),
                     0,
                 )
             })?;
-            let x = Self::get_int(group, "XCOO").ok_or_else(|| {
+            let x = get_i32(group, "XCOO")?.ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG2D missing XCOO".to_string()),
                     0,
@@ -339,19 +412,19 @@ impl GeometrySystem {
         let mut depth = Vec::with_capacity(groups.len());
 
         for group in groups {
-            let y = Self::get_int(group, "YCOO").ok_or_else(|| {
+            let y = get_i32(group, "YCOO")?.ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG3D missing YCOO".to_string()),
                     0,
                 )
             })?;
-            let x = Self::get_int(group, "XCOO").ok_or_else(|| {
+            let x = get_i32(group, "XCOO")?.ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG3D missing XCOO".to_string()),
                     0,
                 )
             })?;
-            let z = Self::get_int(group, "VE3D").ok_or_else(|| {
+            let z = get_i32(group, "VE3D")?.ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("SG3D missing VE3D".to_string()),
                     0,
@@ -381,14 +454,6 @@ impl GeometrySystem {
         );
 
         Ok(())
-    }
-
-    /// Helper: extract integer value from subfield group
-    fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
-        group
-            .iter()
-            .find(|(l, _)| l == label)
-            .and_then(|(_, v)| v.as_int())
     }
 }
 
@@ -435,7 +500,7 @@ impl TopologySystem {
 
         for group in groups {
             // Extract NAME (B40 bitstring - 5 bytes)
-            let name_bytes = Self::get_bytes(group, "NAME").ok_or_else(|| {
+            let name_bytes = get_bytes(group, "NAME")?.ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("VRPT missing NAME".to_string()),
                     0,
@@ -462,16 +527,16 @@ impl TopologySystem {
             })?;
 
             // Extract orientation (optional, default 255=N/A)
-            let ornt = Self::get_int(group, "ORNT").unwrap_or(255) as u8;
+            let ornt = get_u8(group, "ORNT")?.unwrap_or(255);
 
             // Extract usage (optional, default 255=N/A)
-            let usag = Self::get_int(group, "USAG").unwrap_or(255) as u8;
+            let usag = get_u8(group, "USAG")?.unwrap_or(255);
 
             // Extract topology indicator (optional, default 255=N/A)
-            let topi = Self::get_int(group, "TOPI").unwrap_or(255) as u8;
+            let topi = get_u8(group, "TOPI")?.unwrap_or(255);
 
             // Extract masking (optional, default 255=N/A)
-            let mask = Self::get_int(group, "MASK").unwrap_or(255) as u8;
+            let mask = get_u8(group, "MASK")?.unwrap_or(255);
 
             neighbors.push(VectorNeighbor {
                 entity: neighbor_entity,
@@ -488,25 +553,6 @@ impl TopologySystem {
             .insert(entity, VectorTopology { neighbors });
 
         Ok(())
-    }
-
-    /// Helper: extract integer value from subfield group
-    fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
-        group
-            .iter()
-            .find(|(l, _)| l == label)
-            .and_then(|(_, v)| v.as_int())
-    }
-
-    /// Helper: extract bytes value from subfield group
-    fn get_bytes<'a>(group: &'a [(String, SubfieldValue)], label: &str) -> Option<&'a [u8]> {
-        group.iter().find(|(l, _)| l == label).and_then(|(_, v)| {
-            if let SubfieldValue::Bytes(bytes) = v {
-                Some(bytes.as_slice())
-            } else {
-                None
-            }
-        })
     }
 }
 
@@ -554,7 +600,7 @@ impl FeatureBindSystem {
 
         for group in groups {
             // Extract NAME (B40 bitstring - 5 bytes)
-            let name_bytes = Self::get_bytes(group, "NAME").ok_or_else(|| {
+            let name_bytes = get_bytes(group, "NAME")?.ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("FSPT missing NAME".to_string()),
                     0,
@@ -581,9 +627,9 @@ impl FeatureBindSystem {
             })?;
 
             // Extract flags (optional, default 255=N/A)
-            let ornt = Self::get_int(group, "ORNT").unwrap_or(255) as u8;
-            let usag = Self::get_int(group, "USAG").unwrap_or(255) as u8;
-            let mask = Self::get_int(group, "MASK").unwrap_or(255) as u8;
+            let ornt = get_u8(group, "ORNT")?.unwrap_or(255);
+            let usag = get_u8(group, "USAG")?.unwrap_or(255);
+            let mask = get_u8(group, "MASK")?.unwrap_or(255);
 
             spatial_refs.push(SpatialRef {
                 entity: vector_entity,
@@ -629,7 +675,7 @@ impl FeatureBindSystem {
 
         for group in groups {
             // Extract LNAM (B64 bitstring - 8 bytes)
-            let lnam_bytes = Self::get_bytes(group, "LNAM").ok_or_else(|| {
+            let lnam_bytes = get_bytes(group, "LNAM")?.ok_or_else(|| {
                 ParseError::at(
                     ParseErrorKind::InvalidField("FFPT missing LNAM".to_string()),
                     0,
@@ -667,25 +713,6 @@ impl FeatureBindSystem {
         pointers.related_features = related_features;
 
         Ok(())
-    }
-
-    /// Helper: extract integer value from subfield group
-    fn get_int(group: &[(String, SubfieldValue)], label: &str) -> Option<i32> {
-        group
-            .iter()
-            .find(|(l, _)| l == label)
-            .and_then(|(_, v)| v.as_int())
-    }
-
-    /// Helper: extract bytes value from subfield group
-    fn get_bytes<'a>(group: &'a [(String, SubfieldValue)], label: &str) -> Option<&'a [u8]> {
-        group.iter().find(|(l, _)| l == label).and_then(|(_, v)| {
-            if let SubfieldValue::Bytes(bytes) = v {
-                Some(bytes.as_slice())
-            } else {
-                None
-            }
-        })
     }
 }
 

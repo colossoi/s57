@@ -12,8 +12,10 @@ use std::collections::HashMap;
 /// Field format type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormatType {
-    /// Binary integer (b11, b12, b14, b24)
-    BinaryInt,
+    /// Binary unsigned integer (b11, b12, b14)
+    BinaryUnsigned,
+    /// Binary signed integer (b21, b22, b24)
+    BinarySigned,
     /// ASCII text, variable-length (A) - terminated by UT/FT
     Ascii,
     /// ASCII text, fixed-length (A(n)) - read exactly n bytes
@@ -294,7 +296,20 @@ impl DDR {
         let has_width = width_str.starts_with('(');
 
         let format = match first_char {
-            Some('b') => FormatType::BinaryInt, // b11, b12, b14, b24
+            Some('b') => {
+                // Determine if signed or unsigned from the code
+                // b1x = unsigned (b11, b12, b14)
+                // b2x = signed (b21, b22, b24)
+                if let Ok(code) = width_str.parse::<usize>() {
+                    if code >= 20 && code < 30 {
+                        FormatType::BinarySigned // b21, b22, b24
+                    } else {
+                        FormatType::BinaryUnsigned // b11, b12, b14
+                    }
+                } else {
+                    FormatType::BinaryUnsigned // Default to unsigned if can't parse
+                }
+            }
             Some('B') => FormatType::BitString, // B(n)
             Some('A') | Some('a') => {
                 if has_width {
@@ -317,11 +332,13 @@ impl DDR {
         // Extract width from format spec
         // Return Some(width) for fixed-width formats, None for variable-length
         let width = match format {
-            FormatType::BinaryInt => {
+            FormatType::BinaryUnsigned | FormatType::BinarySigned => {
                 // Binary formats per ISO/IEC 8211:
                 // b11 = 1 byte unsigned
                 // b12 = 2 bytes unsigned
                 // b14 = 4 bytes unsigned
+                // b21 = 1 byte signed
+                // b22 = 2 bytes signed
                 // b24 = 4 bytes signed (two's complement)
                 // All binary formats are fixed-width
                 if let Ok(code) = width_str.parse::<usize>() {
@@ -437,7 +454,9 @@ impl DDR {
                                 .map(|next_def| {
                                     matches!(
                                         next_def.format,
-                                        FormatType::BinaryInt | FormatType::RealBinary
+                                        FormatType::BinaryUnsigned
+                                            | FormatType::BinarySigned
+                                            | FormatType::RealBinary
                                     )
                                 })
                                 .unwrap_or(false);
@@ -542,18 +561,32 @@ impl DDR {
         }
 
         match format {
-            FormatType::BinaryInt => {
-                // Binary integer per ISO/IEC 8211:
+            FormatType::BinaryUnsigned => {
+                // Binary unsigned integer per ISO/IEC 8211:
                 // b11 = 1 byte unsigned
                 // b12 = 2 bytes unsigned, little-endian
                 // b14 = 4 bytes unsigned, little-endian
-                // b24 = 4 bytes signed, little-endian, two's complement
                 match data.len() {
                     1 => SubfieldValue::Integer(data[0] as i32),
                     2 => SubfieldValue::Integer(u16::from_le_bytes([data[0], data[1]]) as i32),
                     4 => {
-                        // 4-byte integer - could be b14 (unsigned) or b24 (signed)
-                        // Read as signed i32 (works for both)
+                        // b14: 4-byte unsigned integer
+                        let u_val = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+                        SubfieldValue::UnsignedInteger(u_val)
+                    }
+                    _ => SubfieldValue::Bytes(data.to_vec()),
+                }
+            }
+            FormatType::BinarySigned => {
+                // Binary signed integer per ISO/IEC 8211:
+                // b21 = 1 byte signed, two's complement
+                // b22 = 2 bytes signed, little-endian, two's complement
+                // b24 = 4 bytes signed, little-endian, two's complement
+                match data.len() {
+                    1 => SubfieldValue::Integer(data[0] as i8 as i32),
+                    2 => SubfieldValue::Integer(i16::from_le_bytes([data[0], data[1]]) as i32),
+                    4 => {
+                        // b24: 4-byte signed integer
                         SubfieldValue::Integer(i32::from_le_bytes([
                             data[0], data[1], data[2], data[3],
                         ]))
@@ -642,8 +675,10 @@ impl<'a> ParsedField<'a> {
 pub enum SubfieldValue {
     /// Null/empty value
     Null,
-    /// Integer value
+    /// Signed integer value (b21, b22, b24)
     Integer(i32),
+    /// Unsigned integer value (b11, b12, b14)
+    UnsignedInteger(u32),
     /// Real/float value
     Real(f64),
     /// String value
@@ -653,10 +688,18 @@ pub enum SubfieldValue {
 }
 
 impl SubfieldValue {
-    /// Get as integer if possible
+    /// Get as integer if possible (only for signed integers)
     pub fn as_int(&self) -> Option<i32> {
         match self {
             SubfieldValue::Integer(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    /// Get as unsigned integer if possible
+    pub fn as_uint(&self) -> Option<u32> {
+        match self {
+            SubfieldValue::UnsignedInteger(u) => Some(*u),
             _ => None,
         }
     }
@@ -666,6 +709,7 @@ impl SubfieldValue {
         match self {
             SubfieldValue::Real(f) => Some(*f),
             SubfieldValue::Integer(i) => Some(*i as f64),
+            SubfieldValue::UnsignedInteger(u) => Some(*u as f64),
             _ => None,
         }
     }
@@ -1012,6 +1056,89 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_foid() {
+        // FOID field from record 6800 of US2EC04M.000
+        // Hex: 26 02 c4 fb d5 1a e2 07 1e
+        // Format: (b12,b14,b12) = AGEN!FIDN!FIDS
+        // Should parse as:
+        // - AGEN (b12): 0x0226 = 550 (NOAA)
+        // - FIDN (b14): 0x1ad5fbc4 = 450231236
+        // - FIDS (b12): 0x07e2 = 2018
+        // - 0x1e = field terminator
+        let field_data: Vec<u8> = vec![0x26, 0x02, 0xc4, 0xfb, 0xd5, 0x1a, 0xe2, 0x07, 0x1e];
+
+        let array_descriptor = "AGEN!FIDN!FIDS".to_string();
+        let format_controls = "(b12,b14,b12)".to_string();
+
+        let subfields = DDR::parse_format_controls(&array_descriptor, &format_controls);
+
+        // Verify subfield definitions
+        assert_eq!(subfields.len(), 3, "Should have 3 subfields");
+        assert_eq!(subfields[0].label, "AGEN");
+        assert_eq!(subfields[0].width, Some(2), "b12 should be 2 bytes");
+        assert_eq!(subfields[1].label, "FIDN");
+        assert_eq!(subfields[1].width, Some(4), "b14 should be 4 bytes");
+        assert_eq!(subfields[2].label, "FIDS");
+        assert_eq!(subfields[2].width, Some(2), "b12 should be 2 bytes");
+
+        let field_def = FieldDef {
+            tag: "FOID".to_string(),
+            name: "Feature object identifier field".to_string(),
+            array_descriptor: array_descriptor.clone(),
+            format_controls: format_controls.clone(),
+            subfields,
+            is_repeating: false,
+        };
+
+        let mut ddr = DDR {
+            field_defs: std::collections::HashMap::new(),
+            schema: OverrideSchema::new(),
+        };
+        ddr.field_defs.insert("FOID".to_string(), field_def);
+
+        let field = Field {
+            tag: "FOID".to_string(),
+            data: field_data.clone(),
+        };
+
+        let result = ddr.parse_field_data(&field);
+        assert!(
+            result.is_ok(),
+            "Failed to parse FOID field: {:?}",
+            result.err()
+        );
+
+        let parsed = result.unwrap();
+        let groups = parsed.groups();
+        assert_eq!(groups.len(), 1, "Should have 1 group");
+        let group = &groups[0];
+
+        println!("\nParsed FOID:");
+        for (label, value) in group {
+            println!("  {}: {:?}", label, value);
+        }
+
+        // Validate all fields are present and correct
+        let agen = group.iter().find(|(label, _)| label == "AGEN");
+        assert!(agen.is_some(), "AGEN not found");
+        if let Some((_, SubfieldValue::Integer(val))) = agen {
+            assert_eq!(*val, 550, "AGEN should be 550 (NOAA)");
+        }
+
+        let fidn = group.iter().find(|(label, _)| label == "FIDN");
+        assert!(fidn.is_some(), "FIDN not found");
+        if let Some((_, SubfieldValue::UnsignedInteger(val))) = fidn {
+            assert_eq!(*val, 450231236, "FIDN should be 450231236");
+        }
+
+        let fids = group.iter().find(|(label, _)| label == "FIDS");
+        assert!(fids.is_some(), "FIDS not found");
+        if let Some((_, SubfieldValue::Integer(val))) = fids {
+            assert_eq!(*val, 2018, "FIDS should be 2018");
+        }
+    }
+
+    #[test]
     fn test_parse_vrid_with_0x1e_in_rcid() {
         // VRID field with RCID=30 (0x1E), which looks like a field terminator
         // Hex: 6e 1e 00 00 00 01 00 01 1e
@@ -1088,7 +1215,7 @@ mod tests {
             rcid.is_some(),
             "RCID not found - parser stopped early at 0x1E byte"
         );
-        if let Some((_, SubfieldValue::Integer(val))) = rcid {
+        if let Some((_, SubfieldValue::UnsignedInteger(val))) = rcid {
             assert_eq!(
                 *val, 30,
                 "RCID should be 30 (0x1E in little-endian 4-byte format)"

@@ -36,8 +36,8 @@ enum Commands {
         record: Option<usize>,
 
         /// Limit number of records to print (only for yaml format)
-        #[arg(short, long, default_value = "10")]
-        limit: usize,
+        #[arg(short, long)]
+        limit: Option<usize>,
     },
 
     /// List all feature objects in the file
@@ -173,7 +173,7 @@ fn print_info(path: &PathBuf, file_size: usize, file: &S57File) {
     }
 }
 
-fn print_yaml(file: &S57File, record_filter: Option<usize>, limit: usize) {
+fn print_yaml(file: &S57File, record_filter: Option<usize>, limit: Option<usize>) {
     let records = file.records();
 
     // Filter to specific record if requested
@@ -282,7 +282,7 @@ fn print_hex(file: &S57File, record_filter: Option<usize>) {
 fn print_yaml_structure_with_ddr(
     records: &[&s57_parse::iso8211::Record],
     record_filter: Option<usize>,
-    limit: usize,
+    limit: Option<usize>,
     ddr: &s57_parse::ddr::DDR,
 ) {
     use s57_parse::interpret::*;
@@ -309,7 +309,7 @@ fn print_yaml_structure_with_ddr(
     let records_to_show = if record_filter.is_some() {
         records.len()
     } else {
-        limit.min(records.len())
+        limit.unwrap_or_else(|| records.len())
     };
     for (idx, record) in records.iter().enumerate().take(records_to_show) {
         // When filtering, use the actual record number; otherwise use the index
@@ -464,6 +464,10 @@ fn print_yaml_structure_with_ddr(
                                         };
                                         println!("{}{}: {}{}", indent, label, i, comment);
                                     }
+                                    s57_parse::ddr::SubfieldValue::UnsignedInteger(u) => {
+                                        // Large unsigned values like FIDN, RCID, etc.
+                                        println!("{}{}: {}", indent, label, u);
+                                    }
                                     s57_parse::ddr::SubfieldValue::Real(f) => {
                                         println!("{}{}: {:.6}", indent, label, f);
                                     }
@@ -495,10 +499,10 @@ fn print_yaml_structure_with_ddr(
     }
 
     // Only show "more records" message when not filtering and there are more records
-    if record_filter.is_none() && records.len() > limit {
+    if record_filter.is_none() && records.len() > records_to_show {
         println!(
             "  # ... {} more records (use --limit to see more)",
-            records.len() - limit
+            records.len() - records_to_show
         );
     }
 }
@@ -506,7 +510,7 @@ fn print_yaml_structure_with_ddr(
 fn print_yaml_structure(
     records: &[&s57_parse::iso8211::Record],
     record_filter: Option<usize>,
-    limit: usize,
+    limit: Option<usize>,
 ) {
     use s57_parse::interpret::*;
 
@@ -514,7 +518,7 @@ fn print_yaml_structure(
     let records_to_show = if record_filter.is_some() {
         records.len()
     } else {
-        limit.min(records.len())
+        limit.unwrap_or_else(|| records.len())
     };
     for (idx, record) in records.iter().enumerate().take(records_to_show) {
         let i = record_filter.unwrap_or(idx);
@@ -561,10 +565,10 @@ fn print_yaml_structure(
     }
 
     // Only show "more records" message when not filtering and there are more records
-    if record_filter.is_none() && records.len() > limit {
+    if record_filter.is_none() && records.len() > records_to_show {
         println!(
             "  # ... {} more records (use --limit to see more)",
-            records.len() - limit
+            records.len() - records_to_show
         );
     }
 }
