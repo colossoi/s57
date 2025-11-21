@@ -1,4 +1,5 @@
 mod features;
+mod index;
 mod render;
 mod svg;
 
@@ -53,7 +54,11 @@ enum Commands {
     },
 
     /// Calculate geographic extent (bounding box) of the chart
-    Extent,
+    Extent {
+        /// SQLite database path to store feature index
+        #[arg(short, long, value_name = "DB")]
+        database: Option<PathBuf>,
+    },
 
     /// Render features to SVG
     Render {
@@ -147,8 +152,8 @@ fn main() {
         Commands::ShowObject { rcid } => {
             features::show_object(&file, *rcid);
         }
-        Commands::Extent => {
-            features::print_extent(&file);
+        Commands::Extent { database } => {
+            features::print_extent(&file, &cli.file, database.as_deref());
         }
         Commands::Render {
             output,

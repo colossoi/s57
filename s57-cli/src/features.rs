@@ -257,8 +257,43 @@ pub fn show_object(file: &S57File, target_rcid: u32) {
     }
 }
 
-pub fn print_extent(file: &S57File) {
-    // Build ECS World from S57 file
+pub fn print_extent(
+    file: &S57File,
+    file_path: &std::path::Path,
+    database_path: Option<&std::path::Path>,
+) {
+    // If database path provided, use indexing module
+    if let Some(db_path) = database_path {
+        match crate::index::index_features(file, file_path, db_path) {
+            Ok(stats) => {
+                println!(
+                    "Indexed {} of {} features to database",
+                    stats.indexed_features, stats.total_features
+                );
+                if let Some(min_lat) = stats.chart_min_lat {
+                    println!("\nChart Geographic Extent:");
+                    println!(
+                        "  Latitude:  {:.7} to {:.7}",
+                        min_lat,
+                        stats.chart_max_lat.unwrap()
+                    );
+                    println!(
+                        "  Longitude: {:.7} to {:.7}",
+                        stats.chart_min_lon.unwrap(),
+                        stats.chart_max_lon.unwrap()
+                    );
+                    println!("  Scale: 1:{}", stats.scale);
+                }
+                return;
+            }
+            Err(e) => {
+                eprintln!("Error indexing features: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Otherwise, just compute and print overall extent
     let world = match s57_interp::build_world(file) {
         Ok(world) => world,
         Err(e) => {
