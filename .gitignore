@@ -1,2 +1,9 @@
+# Rust build artifacts
 /target
+
+# Test data
 /test_data
+
+# Local Claude Code configuration
+.mcp.json
+CLAUDE.md
