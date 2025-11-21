@@ -1,15 +1,18 @@
 #!/usr/bin/env nu
-# Process S-57 chart ZIP files and report geographic extents
+# Process S-57 chart ZIP files and index features to SQLite database
 #
 # Requirements: Set S57_CLI environment variable to path of s57-cli binary
 #
-# Usage: nu process_chart_zip.nu <zip_url>
-# Example: S57_CLI=../target/release/s57-cli nu process_chart_zip.nu https://charts.noaa.gov/ENCs/IN_ENCs.zip
+# Usage: nu process_chart_zip.nu <zip_url> [database_path]
+# Example: S57_CLI=../target/release/s57-cli nu process_chart_zip.nu https://charts.noaa.gov/ENCs/IN_ENCs.zip charts.db
 
 def main [
-    zip_url: string  # URL to download S-57 chart ZIP file
+    zip_url: string              # URL to download S-57 chart ZIP file
+    database_path?: string       # Optional SQLite database path (default: charts.db)
 ] {
+    let db_path = if ($database_path | is-empty) { "charts.db" } else { $database_path }
     print $"Processing charts from: ($zip_url)"
+    print $"Database: ($db_path)"
 
     # Create temporary directory
     let temp_dir = (mktemp -d)
@@ -42,52 +45,49 @@ def main [
         return
     }
 
-    # Process each chart file and collect results
-    print "Chart Extents:"
-    print "============================================"
-    print $"(char nl){'File':<40} {'Min Lat':>10} {'Max Lat':>10} {'Min Lon':>11} {'Max Lon':>11}"
-    print $"{'-' * 40} {'-' * 10} {'-' * 10} {'-' * 11} {'-' * 11}"
+    # Process each chart file and index to database
+    print "\nIndexing Features to Database:"
+    print "============================================\n"
+
+    mut charts_processed = 0
+    mut charts_failed = 0
+    mut total_features = 0
 
     for file in $chart_files {
         let chart_name = ($file | path basename)
+        print $"Processing ($chart_name)..."
 
-        # Run s57-cli extent command (file path must come before subcommand)
+        # Run s57-cli extent command with database parameter
         let result = (do -i {
-            ^$cli_path $file extent
+            ^$cli_path $file extent --database $db_path
             | complete
         })
 
         if $result.exit_code != 0 {
-            print $"($chart_name | fill -a l -c ' ' -w 40) [Error: ($result.stderr | str trim)]"
-            continue
+            print $"  ERROR: Failed to process chart"
+            $charts_failed = $charts_failed + 1
+        } else {
+            # Parse output: "INDEXED: 1173/1173"
+            let output = ($result.stdout | str trim)
+            print $"  ($output)"
+
+            let parsed = ($output | parse -r 'INDEXED: (?<indexed>\d+)/(?<total>\d+)')
+            if ($parsed | length) > 0 {
+                let indexed = ($parsed | first | get indexed | into int)
+                $total_features = $total_features + $indexed
+            }
+            $charts_processed = $charts_processed + 1
         }
-
-        # Parse the extent output
-        # Looking for lines like: "  Latitude:  41.1234567 to 41.5678901"
-        let lat_line = ($result.stdout | lines | where { |line| $line =~ '^\s*Latitude:' } | first)
-        let lon_line = ($result.stdout | lines | where { |line| $line =~ '^\s*Longitude:' } | first)
-
-        if ($lat_line | is-empty) or ($lon_line | is-empty) {
-            print $"($chart_name | fill -a l -c ' ' -w 40) [No extent data]"
-            continue
-        }
-
-        # Extract numbers using regex
-        let lat_parts = ($lat_line | parse -r 'Latitude:\s+(?<min>-?\d+\.\d+)\s+to\s+(?<max>-?\d+\.\d+)')
-        let lon_parts = ($lon_line | parse -r 'Longitude:\s+(?<min>-?\d+\.\d+)\s+to\s+(?<max>-?\d+\.\d+)')
-
-        if ($lat_parts | length) == 0 or ($lon_parts | length) == 0 {
-            print $"($chart_name | fill -a l -c ' ' -w 40) [Parse error]"
-            continue
-        }
-
-        let min_lat = ($lat_parts | first | get min)
-        let max_lat = ($lat_parts | first | get max)
-        let min_lon = ($lon_parts | first | get min)
-        let max_lon = ($lon_parts | first | get max)
-
-        print $"($chart_name | fill -a l -c ' ' -w 40) ($min_lat | fill -a r -c ' ' -w 10) ($max_lat | fill -a r -c ' ' -w 10) ($min_lon | fill -a r -c ' ' -w 11) ($max_lon | fill -a r -c ' ' -w 11)"
+        print ""
     }
+
+    # Print summary
+    print "============================================"
+    print "Summary:"
+    print $"  Charts processed: ($charts_processed)"
+    print $"  Charts failed: ($charts_failed)"
+    print $"  Total features indexed: ($total_features)"
+    print $"  Database: ($db_path)"
 
     # Cleanup
     print $"\n(char nl)Cleaning up temporary directory..."

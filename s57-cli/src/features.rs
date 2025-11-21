@@ -267,27 +267,13 @@ pub fn print_extent(
         match crate::index::index_features(file, file_path, db_path) {
             Ok(stats) => {
                 println!(
-                    "Indexed {} of {} features to database",
+                    "INDEXED: {}/{}",
                     stats.indexed_features, stats.total_features
                 );
-                if let Some(min_lat) = stats.chart_min_lat {
-                    println!("\nChart Geographic Extent:");
-                    println!(
-                        "  Latitude:  {:.7} to {:.7}",
-                        min_lat,
-                        stats.chart_max_lat.unwrap()
-                    );
-                    println!(
-                        "  Longitude: {:.7} to {:.7}",
-                        stats.chart_min_lon.unwrap(),
-                        stats.chart_max_lon.unwrap()
-                    );
-                    println!("  Scale: 1:{}", stats.scale);
-                }
                 return;
             }
             Err(e) => {
-                eprintln!("Error indexing features: {}", e);
+                eprintln!("ERROR: {}", e);
                 std::process::exit(1);
             }
         }
