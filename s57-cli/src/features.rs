@@ -256,3 +256,73 @@ pub fn show_object(file: &S57File, target_rcid: u32) {
         }
     }
 }
+
+pub fn print_extent(file: &S57File) {
+    // Build ECS World from S57 file
+    let world = match s57_interp::build_world(file) {
+        Ok(world) => world,
+        Err(e) => {
+            eprintln!("Error building world: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Compute extent from all coordinates (S-57 files don't store pre-computed bounds)
+    let mut min_lat: Option<f64> = None;
+    let mut max_lat: Option<f64> = None;
+    let mut min_lon: Option<f64> = None;
+    let mut max_lon: Option<f64> = None;
+    let mut coord_count = 0;
+
+    // Iterate through all vector entities with exact positions
+    for (_entity, positions) in &world.exact_positions {
+        for i in 0..positions.lat.len() {
+            let lat = positions.lat[i].to_f64().unwrap_or(0.0);
+            let lon = positions.lon[i].to_f64().unwrap_or(0.0);
+
+            min_lat = Some(min_lat.map_or(lat, |v| v.min(lat)));
+            max_lat = Some(max_lat.map_or(lat, |v| v.max(lat)));
+            min_lon = Some(min_lon.map_or(lon, |v| v.min(lon)));
+            max_lon = Some(max_lon.map_or(lon, |v| v.max(lon)));
+            coord_count += 1;
+        }
+    }
+
+    if coord_count == 0 {
+        println!("No coordinates found in chart");
+        return;
+    }
+
+    // Print extent
+    println!("Geographic Extent:");
+    println!(
+        "  Latitude:  {:.7} to {:.7}",
+        min_lat.unwrap(),
+        max_lat.unwrap()
+    );
+    println!(
+        "  Longitude: {:.7} to {:.7}",
+        min_lon.unwrap(),
+        max_lon.unwrap()
+    );
+    println!("  Total coordinates: {}", coord_count);
+
+    // Calculate dimensions
+    let lat_span = max_lat.unwrap() - min_lat.unwrap();
+    let lon_span = max_lon.unwrap() - min_lon.unwrap();
+    println!("\nDimensions:");
+    println!(
+        "  Latitude span:  {:.7}° ({:.2} km)",
+        lat_span,
+        lat_span * 111.0
+    );
+    println!(
+        "  Longitude span: {:.7}° ({:.2} km at center)",
+        lon_span,
+        lon_span
+            * 111.0
+            * ((min_lat.unwrap() + max_lat.unwrap()) / 2.0)
+                .to_radians()
+                .cos()
+    );
+}

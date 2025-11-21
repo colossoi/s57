@@ -52,6 +52,9 @@ enum Commands {
         rcid: u32,
     },
 
+    /// Calculate geographic extent (bounding box) of the chart
+    Extent,
+
     /// Render features to SVG
     Render {
         /// Output SVG file path
@@ -143,6 +146,9 @@ fn main() {
         }
         Commands::ShowObject { rcid } => {
             features::show_object(&file, *rcid);
+        }
+        Commands::Extent => {
+            features::print_extent(&file);
         }
         Commands::Render {
             output,
