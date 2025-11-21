@@ -4,3 +4,7 @@ resolver = "2"
 
 [workspace.dependencies]
 log = "0.4"
+
+[profile.release]
+debug = 2
+strip = false

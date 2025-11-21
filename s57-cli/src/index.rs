@@ -36,6 +36,12 @@ pub struct IndexStats {
 fn init_database(db_path: &Path) -> SqlResult<Connection> {
     let conn = Connection::open(db_path)?;
 
+    // Enable WAL mode for better concurrency and performance
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+
+    // Disable fsync for faster writes (less safe but much faster)
+    conn.pragma_update(None, "synchronous", "OFF")?;
+
     // Create features table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS features (
@@ -86,6 +92,17 @@ pub fn index_features(
         .map_err(|e| format!("Failed to initialize database: {}", e))?;
 
     info!("Database table ready");
+
+    // Prepare INSERT statement once for reuse
+    let mut stmt = conn
+        .prepare(
+            "INSERT OR REPLACE INTO features
+             (filename, entity_id, geometry_type, scale, object_code, object_name,
+              group_code, group_name, version, update_instruction,
+              min_lat, max_lat, min_lon, max_lon)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        )
+        .map_err(|e| format!("Failed to prepare statement: {}", e))?;
 
     // Set up topology traversal context
     let ctx =
@@ -172,30 +189,23 @@ pub fn index_features(
             // Get group name
             let grp_name = group_name(meta.grup);
 
-            // Insert into database
-            match conn.execute(
-                "INSERT OR REPLACE INTO features
-                 (filename, entity_id, geometry_type, scale, object_code, object_name,
-                  group_code, group_name, version, update_instruction,
-                  min_lat, max_lat, min_lon, max_lon)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-                rusqlite::params![
-                    filename,
-                    entity_id,
-                    geom_type,
-                    scale,
-                    meta.objl,
-                    object_name,
-                    meta.grup,
-                    grp_name,
-                    meta.rver,
-                    meta.ruin,
-                    min_lat,
-                    max_lat,
-                    min_lon,
-                    max_lon
-                ],
-            ) {
+            // Insert into database using prepared statement
+            match stmt.execute(rusqlite::params![
+                filename,
+                entity_id,
+                geom_type,
+                scale,
+                meta.objl,
+                object_name,
+                meta.grup,
+                grp_name,
+                meta.rver,
+                meta.ruin,
+                min_lat,
+                max_lat,
+                min_lon,
+                max_lon
+            ]) {
                 Ok(_) => {
                     stats.indexed_features += 1;
                     if stats.indexed_features % 100 == 0 {
